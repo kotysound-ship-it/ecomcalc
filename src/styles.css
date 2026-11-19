@@ -227,3 +227,12 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 .small-note { font-size: 12.5px; }
 .err-text { color: var(--bad); font-size: 13px; }
 #keyFoundModal { z-index: 25; }
+
+/* 업데이트 */
+label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+label.check input { width: auto; margin: 0; padding: 0; }
+.progress { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.progress-bar { flex: 1; height: 8px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
+.progress-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.progress span { font-size: 12px; min-width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+.modal-box a { color: var(--accent); }

@@ -20,4 +20,10 @@ contextBridge.exposeInMainWorld('api', {
   declineKey: () => ipcRenderer.invoke('keydetect:decline'),
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
+  checkUpdate: (opts) => ipcRenderer.invoke('update:check', opts),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (_e, p) => cb(p)),
+  skipUpdate: (v) => ipcRenderer.invoke('update:skip', v),
+  setAutoUpdate: (on) => ipcRenderer.invoke('update:setAuto', on),
+  revealUpdate: () => ipcRenderer.invoke('update:reveal'),
 });

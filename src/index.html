@@ -134,6 +134,12 @@
         <small class="muted">"장부에 기록" 시 이 파일에 계산기별 시트로 한 줄씩 추가됩니다. 결과 칸은 엑셀 함수로 들어가 입력값을 고치면 자동 재계산돼요.</small>
       </label>
       <div class="row-btns"><button id="btnChooseLedger">위치 변경…</button><button id="btnRevealLedger">Finder에서 보기</button></div>
+      <hr />
+      <div class="setting">
+        <span>앱 업데이트 <em class="muted">현재 버전 <b id="appVersion"></b></em></span>
+        <label class="check"><input type="checkbox" id="autoUpdate" /> 실행할 때 새 버전이 있는지 자동으로 확인</label>
+      </div>
+      <div class="row-btns"><button id="btnCheckUpdate">지금 업데이트 확인</button></div>
     </div>
   </div>
 
@@ -169,6 +175,24 @@
       <p class="muted small-note">연결 테스트 후 이 컴퓨터에 암호화해 저장하고, 보안을 위해 클립보드에서는 지웁니다.</p>
       <p class="err-text" id="keyFoundErr" hidden></p>
       <div class="modal-foot"><span class="spacer"></span><button id="btnKeyDecline">아니요</button><button class="primary" id="btnKeyAccept">이 키로 연결하기</button></div>
+    </div>
+  </div>
+
+  <!-- 업데이트 -->
+  <div class="modal" id="updateModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><strong id="updateTitle">🎉 새 버전이 나왔어요</strong><button class="ghost small" data-close>✕</button></div>
+      <p id="updateText"></p>
+      <p><a href="#" id="updateNotes">무엇이 바뀌었나요? ↗</a></p>
+      <div class="progress" id="updateProgress" hidden><div class="progress-bar"><i id="updateBar"></i></div><span id="updatePct">0%</span></div>
+      <p class="err-text" id="updateErr" hidden></p>
+      <div class="modal-foot" id="updateFoot">
+        <button class="ghost" id="btnUpdateSkip">이 버전 건너뛰기</button><span class="spacer"></span>
+        <button id="btnUpdateLater">나중에</button><button class="primary" id="btnUpdateNow">지금 업데이트</button>
+      </div>
+      <div class="modal-foot" id="updateManualFoot" hidden>
+        <span class="spacer"></span><button class="primary" id="btnUpdateReveal">Finder에서 보기</button>
+      </div>
     </div>
   </div>
 

@@ -42,6 +42,8 @@ module.exports = ({ app, win, clipboard }) => {
     process.env.ECOM_OPENAI_BASE_URL = base + '/openai/v1';
     process.env.ECOM_GEMINI_BASE_URL = base + '/gemini';
     process.env.ECOM_OLLAMA_URL = 'http://127.0.0.1:9'; // 처음엔 로컬 AI 없음
+    process.env.ECOM_UPDATE_URL = base + '/no-release'; // 처음엔 릴리스 없음 (실행 직후 자동 확인이 다른 테스트를 방해하지 않게)
+    process.env.ECOM_UPDATE_DRYRUN = '1';
     const userData = app.getPath('userData');
     await sleep(500);
 
@@ -360,7 +362,84 @@ module.exports = ({ app, win, clipboard }) => {
       await js(`document.getElementById('btnKeyDecline').click(); document.getElementById('settingsModal').hidden = true;`);
       ok(/올바르지|권한/.test(err), err);
       ok((await clipboard.readText()) === bad, '실패했는데 클립보드를 지움');
+      await js(`document.getElementById('btnSettings').click();`);
+      await sleep(600);
+      ok(await js(`return document.getElementById('keyFoundModal').hidden`), '실패 후 거절한 키를 다시 물어봄');
+      await js(`document.getElementById('settingsModal').hidden = true;`);
       return err;
+    });
+
+    // ───────── 자동 업데이트 ─────────
+    const readSettingsFile = () => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8'));
+    await step('업데이트: 릴리스가 없으면 수동 확인 시 「최신 버전」 안내, 알림창 없음', async () => {
+      await js(`${H} $('#btnSettings').click();`);
+      await until(`!document.getElementById('settingsModal').hidden`);
+      const ver = await js(`return document.getElementById('appVersion').textContent`);
+      ok(ver === app.getVersion(), '설정에 버전 표시 안 됨: ' + ver);
+      ok(await js(`return document.getElementById('autoUpdate').checked`), '자동 확인 기본값이 켜짐이 아님');
+      await js(`document.getElementById('btnCheckUpdate').click();`);
+      await until(`/최신 버전/.test(document.getElementById('toast').textContent)`);
+      ok(await js(`return document.getElementById('updateModal').hidden`), '알림창이 떴음');
+      return `현재 ${ver}`;
+    });
+    process.env.ECOM_UPDATE_URL = base + '/update';
+    await step('업데이트: 새 버전이 올라오면 알림창 (버전·용량·변경 사항 링크)', async () => {
+      win.webContents.send('menu', 'checkUpdate');
+      await until(`!document.getElementById('updateModal').hidden`);
+      const text = await js(`return document.getElementById('updateText').textContent`);
+      ok(text.includes(app.getVersion()) && text.includes('9.9.0'), text);
+      await js(`document.getElementById('updateNotes').click();`);
+      await sleep(400);
+      ok(/releases\/tag\/v9\.9\.0$/.test(global.__lastExternal), '변경 사항 링크: ' + global.__lastExternal);
+      await shot('update-modal');
+      return text;
+    });
+    await step('업데이트: 「이 버전 건너뛰기」 → 자동 확인 때는 안 뜨고, 수동 확인 때는 뜸', async () => {
+      await js(`document.getElementById('btnUpdateSkip').click();`);
+      await until(`document.getElementById('updateModal').hidden`);
+      ok(readSettingsFile().update.skip === '9.9.0', 'skip 저장 안 됨');
+      const auto = await js(`return await api.checkUpdate({ auto: true })`);
+      ok(!auto.available && auto.skipped, JSON.stringify(auto));
+      win.webContents.send('menu', 'checkUpdate');
+      await until(`!document.getElementById('updateModal').hidden`);
+      return '건너뛴 버전 자동 알림 없음 / 수동 확인은 표시';
+    });
+    await step('업데이트: 파일이 손상되면 설치하지 않고 「다시 시도」 안내', async () => {
+      mock.state.update.corrupt = true;
+      await js(`document.getElementById('btnUpdateNow').click();`);
+      await until(`!document.getElementById('updateErr').hidden`, 15000);
+      const err = await js(`return document.getElementById('updateErr').textContent`);
+      const btn = await js(`return document.getElementById('btnUpdateNow').textContent`);
+      mock.state.update.corrupt = false;
+      ok(/손상|변조/.test(err) && btn === '다시 시도', err + ' / ' + btn);
+      return err;
+    });
+    await step('업데이트: 「지금 업데이트」 → 내려받기·검증·설치 준비 (진행 중엔 창을 닫을 수 없음)', async () => {
+      const target = path.join(userData, 'Applications', 'EcomCalc AI.app');
+      fs.mkdirSync(target, { recursive: true });
+      process.env.ECOM_UPDATE_TARGET = target;
+      mock.state.slow = true;
+      await js(`document.getElementById('btnUpdateNow').click();`);
+      await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); document.querySelector('#updateModal [data-close]').click();`);
+      const stillOpen = await js(`return !document.getElementById('updateModal').hidden`);
+      await until(`/설치 준비 완료/.test(document.getElementById('updateTitle').textContent)`, 20000);
+      mock.state.slow = false;
+      const pct = await js(`return document.getElementById('updatePct').textContent`);
+      ok(stillOpen, '진행 중에 창이 닫힘');
+      ok(pct === '100%', '진행률 ' + pct);
+      await shot('update-done');
+      await js(`delete document.getElementById('updateModal').dataset.busy; document.getElementById('updateModal').hidden = true;`);
+      return `진행률 ${pct}`;
+    });
+    await step('업데이트: 설정에서 자동 확인 끄기', async () => {
+      await js(`${H} $('#btnSettings').click();`);
+      await until(`!document.getElementById('settingsModal').hidden`);
+      await js(`const c = document.getElementById('autoUpdate'); c.checked = false; c.dispatchEvent(new Event('change')); document.getElementById('settingsModal').hidden = true;`);
+      await sleep(200);
+      ok(readSettingsFile().update.auto === false, 'auto 저장 안 됨');
+      const r = await js(`return await api.checkUpdate({ auto: true })`);
+      ok(r.off && !r.available, JSON.stringify(r));
+      return '자동 확인 꺼짐';
     });
 
     fs.writeFileSync(OUT, JSON.stringify(results, null, 2));

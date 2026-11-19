@@ -1,5 +1,24 @@
 // 각 AI 공급자의 API 형식을 흉내 내는 로컬 테스트 서버
 const http = require('http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
+
+// 업데이트 테스트용 가짜 새 버전 앱(zip) / 설치 파일
+function makeUpdatePayloads(version) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecom-upd-'));
+  const app = path.join(dir, 'EcomCalc AI.app', 'Contents');
+  fs.mkdirSync(app, { recursive: true });
+  fs.writeFileSync(path.join(app, 'Info.plist'), `<plist><dict><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>`);
+  const zip = path.join(dir, 'app.zip');
+  if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', ['-c', '-k', '--keepParent', path.join(dir, 'EcomCalc AI.app'), zip]);
+  else fs.writeFileSync(zip, 'zip');
+  const exe = Buffer.alloc(300000, 7); // 가짜 설치 파일
+  return { zip: fs.readFileSync(zip), exe };
+}
+const sha512 = (b) => crypto.createHash('sha512').update(b).digest('base64');
 
 const GOOD = 'good-key';
 const GEMINI_TEST_KEY = 'AIza' + 'Sy' + 'T'.repeat(33); // 실제 Gemini 키 형식(39자)
@@ -15,7 +34,8 @@ const PARSE_RESULT = {
 const ADVICE = ['### 진단\n', '마진은 **양호**합니다.\n', '- 가격 유지\n', '- 배송비 절감\n'];
 
 function create() {
-  const state = { requests: [], ollamaModels: ['gemma3:4b'], ollamaUp: true, slow: false };
+  const state = { requests: [], ollamaModels: ['gemma3:4b'], ollamaUp: true, slow: false, update: { version: '9.9.0', corrupt: false } };
+  const payloads = makeUpdatePayloads(state.update.version);
   const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const c of req) body += c;
@@ -64,6 +84,26 @@ function create() {
     if (p === '/ollama/api/tags') {
       if (!state.ollamaUp) { req.socket.destroy(); return; }
       return send(200, { models: state.ollamaModels.map((name) => ({ name })) });
+    }
+
+    // ── 업데이트 (GitHub releases/latest/download 흉내)
+    if (p.startsWith('/update/')) {
+      const v = state.update.version;
+      const name = p.slice('/update/'.length);
+      const zipArm = `EcomCalc-AI-${v}-arm64-mac.zip`, zipX64 = `EcomCalc-AI-${v}-mac.zip`, exe = `EcomCalc-AI-Setup-${v}.exe`;
+      const files = { [zipArm]: payloads.zip, [zipX64]: payloads.zip, [exe]: payloads.exe };
+      if (name === 'latest-mac.yml' || name === 'latest.yml') {
+        const list = name === 'latest.yml' ? [exe] : [zipX64, zipArm];
+        const yml = `version: ${v}\nfiles:\n` + list.map((f) => `  - url: ${f}\n    sha512: ${sha512(files[f])}\n    size: ${files[f].length}\n`).join('') + `releaseDate: '2026-11-19T00:00:00.000Z'\n`;
+        res.writeHead(200, { 'Content-Type': 'text/yaml' }); return res.end(yml);
+      }
+      if (files[name]) {
+        let buf = files[name];
+        if (state.update.corrupt) { buf = Buffer.from(buf); buf[buf.length - 1] ^= 0xff; }
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': buf.length });
+        return res.end(buf);
+      }
+      return send(404, { error: 'not found' });
     }
 
     // ── Gemini

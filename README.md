@@ -14,24 +14,38 @@
   - 지원: Anthropic Claude · OpenAI · Google Gemini · OpenAI 호환 서버 · 로컬 AI(Ollama)
   - 키가 없으면 로컬 AI(Ollama)에 자동 연결, 무료 Gemini 키는 복사만 하면 앱이 알아보고 연결
   - API 키는 OS 보안 저장소(macOS 키체인 / Windows DPAPI)로 암호화 저장
+- **자동 업데이트**: 실행할 때 새 버전을 확인해 알려 주고, 「지금 업데이트」 한 번이면 내려받기 → 무결성(sha512) 검증 → 설치 → 다시 시작
 
 ## 설치
-[Releases](../../releases)에서 내려받으세요.
-- macOS (Apple Silicon): `이커머스AI계산기-<버전>-arm64.dmg`
-- macOS (Intel): `이커머스AI계산기-<버전>-x64.dmg`
-- Windows: `이커머스AI계산기-Setup-<버전>.exe`
+[Releases](../../releases/latest)에서 내려받으세요.
+- macOS (Apple Silicon): `EcomCalc-AI-<버전>-arm64.dmg`
+- macOS (Intel): `EcomCalc-AI-<버전>-x64.dmg`
+- Windows: `EcomCalc-AI-Setup-<버전>.exe`
 
-코드 서명 인증서가 없는 빌드라 처음 실행 시 경고가 나올 수 있습니다.
-- macOS: 앱을 **우클릭 → 열기**
-- Windows: "Windows의 PC 보호" 창에서 **추가 정보 → 실행**
+macOS는 dmg를 열어 앱을 **「응용 프로그램」 폴더로 옮긴 뒤** 실행하세요. 그래야 자동 업데이트가 됩니다.
+
+코드 서명 인증서가 없는 빌드라 처음 한 번은 경고가 나옵니다.
+- **macOS**: 앱을 열어 경고가 뜨면 「완료」 → **시스템 설정 → 개인정보 보호 및 보안** → 아래쪽 「그래도 열기」 → 암호/Touch ID. (macOS 15부터는 우클릭 → 열기로는 허용되지 않습니다.)
+- **Windows**: "Windows의 PC 보호" 창에서 **추가 정보 → 실행**
+
+## 새 버전 배포 (자동 업데이트)
+태그를 올리면 GitHub Actions가 macOS·Windows 설치 파일을 빌드해 Release에 올리고, 사용자 앱이 이를 감지합니다.
+```bash
+npm run release:patch   # 1.3.0 → 1.3.1 (버그 수정)
+npm run release:minor   # 1.3.0 → 1.4.0 (기능 추가)
+```
+- 버전 올림 커밋 + `v1.3.1` 태그를 만들어 푸시합니다. 빌드는 10~15분 정도 걸립니다(저장소 Actions 탭에서 확인).
+- 변경 사항은 Release 페이지에서 자동 생성되며, 앱 알림창의 「무엇이 바뀌었나요?」로 연결됩니다.
+- 저장소는 **공개(public)** 여야 사용자 앱이 업데이트 파일을 받을 수 있습니다.
+- 사용자 앱은 실행 4초 뒤와 켜 둔 동안 6시간마다 확인합니다. 설정에서 자동 확인을 끄거나 메뉴 「업데이트 확인…」으로 직접 확인할 수 있습니다.
 
 ## 개발
 ```bash
 npm install
 npm start            # 개발 실행
-npm test             # 계산 엔진 + 엑셀 수식 검증 (앱 계산 == 엑셀 함수 결과)
+npm test             # 계산 엔진 + 엑셀 수식 검증 + 업데이트 모듈 테스트
 npm run test:e2e     # 앱을 띄워 기능별 자동 테스트 (AI는 로컬 모의 서버 사용)
-npm run dist         # macOS .dmg (arm64, x64)
+npm run dist         # macOS .dmg + 업데이트용 .zip (arm64, x64)
 npm run dist:win     # Windows .exe (NSIS)
 ```
 
@@ -41,6 +55,8 @@ npm run dist:win     # Windows .exe (NSIS)
 | `src/calc.js` | 계산기 정의 · JS 계산 · 엑셀 수식 (화면과 엑셀이 같은 정의 공유) |
 | `src/excel.js` | 엑셀 장부 기록 (ExcelJS) |
 | `src/ai.js` | AI 공급자 연동 (Claude SDK, OpenAI 호환, Gemini) |
+| `src/updater.js` | 자동 업데이트 (GitHub Releases 확인·내려받기·검증·설치) |
+| `.github/workflows/release.yml` | 태그 푸시 시 빌드·배포 |
 | `main.js` | Electron 메인 프로세스: 설정, 키 암호화 저장, IPC, 메뉴 |
 | `src/index.html`, `src/app.js`, `src/styles.css` | 화면 |
 | `test/` | 단위·E2E 테스트, AI 모의 서버 |

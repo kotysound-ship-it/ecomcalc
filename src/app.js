@@ -516,6 +516,8 @@
     $('#apiKey').value = '';
     renderProviderFields();
     $('#ledgerPath').textContent = s.ledgerPath + (s.ledgerExists ? '' : '  (첫 기록 시 생성)');
+    $('#appVersion').textContent = s.version;
+    $('#autoUpdate').checked = s.updateAuto;
     $('#settingsModal').hidden = false;
     if (!$('#rowKey').hidden) $('#apiKey').focus();
     checkClipboardKey();
@@ -544,8 +546,70 @@
   $('#btnChooseLedger').onclick = async () => { const p = await api.chooseLedger(); if (p) openSettings(); };
   $('#btnRevealLedger').onclick = () => api.revealLedger();
 
-  document.querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => { b.closest('.modal').hidden = true; }; });
-  document.querySelectorAll('.modal').forEach((m) => { m.onclick = (e) => { if (e.target === m) { if (m.id === 'keyFoundModal') api.declineKey(); m.hidden = true; } }; });
+  // ───────── 자동 업데이트 ─────────
+  const FILE_MGR = api.platform === 'win32' ? '탐색기' : 'Finder';
+  let pendingUpdate = null;
+  function showUpdate(r) {
+    pendingUpdate = r;
+    const m = $('#updateModal');
+    delete m.dataset.busy;
+    $('#updateTitle').textContent = '🎉 새 버전이 나왔어요';
+    $('#updateText').innerHTML = '';
+    $('#updateText').append(`현재 ${r.current} → 새 버전 `, Object.assign(document.createElement('b'), { textContent: r.version }),
+      `${r.size ? ` (${Math.max(1, Math.round(r.size / 1048576))}MB)` : ''}. 지금 업데이트하면 내려받은 뒤 자동으로 다시 시작돼요. 입력값과 기록은 그대로 유지됩니다.`);
+    $('#updateNotes').parentElement.hidden = false;
+    $('#updateProgress').hidden = true; $('#updateErr').hidden = true;
+    $('#updateFoot').hidden = false; $('#updateManualFoot').hidden = true;
+    $('#btnUpdateNow').disabled = false; $('#btnUpdateNow').textContent = '지금 업데이트';
+    $('#btnUpdateSkip').hidden = false; $('#btnUpdateLater').hidden = false;
+    m.hidden = false;
+  }
+  async function checkUpdate(auto) {
+    if (!auto) toast('업데이트 확인 중…', { ms: 1500 });
+    const r = await api.checkUpdate({ auto });
+    if (r.available) return showUpdate(r);
+    if (auto) return;
+    if (r.error) toast(r.error, { err: true, ms: 6000 });
+    else if (r.disabled) toast('개발 모드에서는 업데이트를 확인하지 않아요');
+    else toast(`✓ 최신 버전이에요 (${r.current})`);
+  }
+  api.onUpdateProgress((pct) => { $('#updateBar').style.width = pct + '%'; $('#updatePct').textContent = pct + '%'; });
+  $('#btnUpdateNow').onclick = async () => {
+    const m = $('#updateModal');
+    m.dataset.busy = '1';
+    $('#updateErr').hidden = true;
+    $('#updateProgress').hidden = false; $('#updateBar').style.width = '0%'; $('#updatePct').textContent = '0%';
+    $('#btnUpdateNow').disabled = true; $('#btnUpdateNow').textContent = '내려받는 중…';
+    $('#btnUpdateSkip').hidden = true; $('#btnUpdateLater').hidden = true;
+    const r = await api.installUpdate();
+    if (r.ok && r.restarting) { $('#updateTitle').textContent = '✓ 설치 중'; $('#btnUpdateNow').textContent = '다시 시작하는 중…'; $('#updatePct').textContent = '100%'; return; }
+    delete m.dataset.busy;
+    if (r.ok && r.manual) {
+      $('#updateTitle').textContent = '📦 새 버전을 준비했어요';
+      $('#updateText').textContent = r.reason === 'NOT_IN_APPLICATIONS'
+        ? `앱을 「응용 프로그램」 폴더가 아닌 곳에서 실행 중이라 자동으로 바꿀 수 없어요. 다운로드 폴더에 준비한 새 버전(${pendingUpdate.version})을 「응용 프로그램」 폴더로 옮겨 주세요. 옮긴 뒤부터는 자동으로 업데이트돼요.`
+        : `앱 폴더에 쓸 권한이 없어 자동으로 바꿀 수 없어요. 다운로드 폴더에 준비한 새 버전(${pendingUpdate.version})을 기존 앱 자리에 덮어써 주세요.`;
+      $('#updateNotes').parentElement.hidden = true; $('#updateProgress').hidden = true;
+      $('#updateFoot').hidden = true; $('#updateManualFoot').hidden = false;
+      return;
+    }
+    if (r.ok && r.dryRun) { $('#updateTitle').textContent = '✓ 설치 준비 완료 (테스트)'; return; }
+    $('#updateErr').textContent = r.error || '업데이트에 실패했어요.'; $('#updateErr').hidden = false;
+    $('#updateProgress').hidden = true;
+    $('#btnUpdateNow').disabled = false; $('#btnUpdateNow').textContent = '다시 시도';
+    $('#btnUpdateLater').hidden = false;
+  };
+  $('#btnUpdateLater').onclick = () => { $('#updateModal').hidden = true; };
+  $('#btnUpdateSkip').onclick = async () => { await api.skipUpdate(pendingUpdate.version); $('#updateModal').hidden = true; toast(`${pendingUpdate.version} 버전 알림을 껐어요. 설정에서 언제든 직접 업데이트할 수 있어요.`); };
+  $('#updateNotes').onclick = (e) => { e.preventDefault(); if (pendingUpdate) api.openExternal(pendingUpdate.notesUrl); };
+  $('#btnUpdateReveal').textContent = `${FILE_MGR}에서 보기`;
+  $('#btnUpdateReveal').onclick = () => { api.revealUpdate(); $('#updateModal').hidden = true; };
+  $('#btnCheckUpdate').onclick = () => { $('#settingsModal').hidden = true; checkUpdate(false); };
+  $('#autoUpdate').onchange = (e) => api.setAutoUpdate(e.target.checked);
+
+  const closeModal = (m) => { if (m.dataset.busy) return; if (m.id === 'keyFoundModal') api.declineKey(); m.hidden = true; };
+  document.querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => closeModal(b.closest('.modal')); });
+  document.querySelectorAll('.modal').forEach((m) => { m.onclick = (e) => { if (e.target === m) closeModal(m); }; });
 
   // ───────── wiring ─────────
   $('#aiGo').onclick = aiFill;
@@ -559,10 +623,10 @@
 
   api.onMenu((cmd) => {
     if (cmd.startsWith('calc:')) return selectCalc(cmd.slice(5));
-    ({ settings: () => openSettings(), record, openLedger, export: exportAll, ai: () => $('#aiInput').focus(), analyze, reset }[cmd] || (() => {}))();
+    ({ settings: () => openSettings(), checkUpdate: () => checkUpdate(false), record, openLedger, export: exportAll, ai: () => $('#aiInput').focus(), analyze, reset }[cmd] || (() => {}))();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { if (!$('#keyFoundModal').hidden) api.declineKey(); document.querySelectorAll('.modal').forEach((m) => { m.hidden = true; }); }
+    if (e.key === 'Escape') document.querySelectorAll('.modal:not([hidden])').forEach(closeModal);
   });
 
   renderSidebar(); renderForm(); compute(); updateHistoryCount();
@@ -570,4 +634,7 @@
   document.querySelectorAll('.hint-kbd').forEach((k) => { k.textContent = MOD + 'K'; });
   if (api.platform === 'win32') $('#btnRevealLedger').textContent = '탐색기에서 보기';
   refreshAIStatus();
+  // 실행 4초 뒤, 그리고 켜 둔 동안 6시간마다 새 버전 확인
+  setTimeout(() => checkUpdate(true), 4000);
+  setInterval(() => { if ($('#updateModal').hidden) checkUpdate(true); }, 6 * 3600 * 1000);
 })();

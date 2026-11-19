@@ -4,12 +4,15 @@ const fs = require('fs');
 const Calc = require('./src/calc');
 const Excel = require('./src/excel');
 const AI = require('./src/ai');
+const Updater = require('./src/updater');
 
 const IS_MAC = process.platform === 'darwin';
 // 테스트/개발용: 사용자 데이터와 분리된 프로필
 if (process.env.ECOM_USERDATA) app.setPath('userData', process.env.ECOM_USERDATA);
 
 let win;
+const updater = Updater.create({ app });
+let manualUpdatePath = null;
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 const keysFile = () => path.join(app.getPath('userData'), 'keys.json');
 const legacyKeyFile = () => path.join(app.getPath('userData'), 'apikey.bin');
@@ -214,6 +217,38 @@ async function aiChat(e, { id, messages }) {
   }
 }
 
+// ───────── 자동 업데이트 (GitHub Releases) ─────────
+function updateSettings() { const u = readSettings().update || {}; return { auto: u.auto !== false, skip: u.skip || null }; }
+function saveUpdateSettings(patch) { const all = readSettings(); writeSettings({ ...all, update: { ...updateSettings(), ...patch } }); }
+function registerUpdateIpc() {
+  // auto: 앱 실행 시 자동 확인(설정에서 끄거나 「이 버전 건너뛰기」한 버전이면 알리지 않음) / 수동: 항상 결과 표시
+  ipcMain.handle('update:check', async (_e, { auto } = {}) => {
+    const u = updateSettings();
+    if (auto && !u.auto) return { available: false, off: true };
+    try {
+      const r = await updater.check();
+      if (auto && r.available && u.skip === r.version) return { ...r, available: false, skipped: true };
+      return r;
+    } catch (err) {
+      return { available: false, error: `업데이트 서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요. (${err.message})` };
+    }
+  });
+  ipcMain.handle('update:install', async (e) => {
+    const sender = e.sender;
+    try {
+      const r = await updater.downloadAndInstall((pct) => { if (!sender.isDestroyed()) sender.send('update:progress', pct); });
+      if (r.manual) manualUpdatePath = r.path;
+      if (r.restarting) setTimeout(() => app.quit(), 400);
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  });
+  ipcMain.handle('update:skip', (_e, version) => { saveUpdateSettings({ skip: String(version) }); });
+  ipcMain.handle('update:setAuto', (_e, on) => { saveUpdateSettings({ auto: !!on }); });
+  ipcMain.handle('update:reveal', () => { if (manualUpdatePath) shell.showItemInFolder(manualUpdatePath); });
+}
+
 // ───────── IPC ─────────
 async function settingsPayload() {
   const s = aiSettings();
@@ -229,10 +264,13 @@ async function settingsPayload() {
     active: describe(await resolveAI()),
     ledgerPath: ledgerPath(),
     ledgerExists: fs.existsSync(ledgerPath()),
+    version: app.getVersion(),
+    updateAuto: updateSettings().auto,
   };
 }
 
 function registerIpc() {
+  registerUpdateIpc();
   ipcMain.handle('ai:parse', aiParse);
   ipcMain.on('ai:chat', aiChat);
   ipcMain.on('ai:abort', (_e, id) => { const c = streams.get(id); if (c) c.abort(); });
@@ -320,7 +358,8 @@ function registerIpc() {
     const { provider, key } = pendingKey;
     pendingKey = null;
     const cfg = { ...cfgFor(provider), key };
-    try { await AI.IMPL[provider].test(cfg); } catch (err) { return { ok: false, error: err.message }; }
+    // 실패해도 이어서 「아니요」를 누르면 이 키를 다시 묻지 않도록 보류 상태 유지
+    try { await AI.IMPL[provider].test(cfg); } catch (err) { pendingKey = { provider, key }; return { ok: false, error: err.message }; }
     setKey(provider, key);
     const cur = aiSettings();
     if (cur.provider !== 'auto' && cur.provider !== provider) writeSettings({ ...readSettings(), ai: { ...cur, provider } });
@@ -341,9 +380,10 @@ function buildMenu() {
   const send = (ch, arg) => () => win && win.webContents.send(ch, arg);
   const ids = Object.keys(Calc.CALCS);
   const settingsItem = { label: '설정…', accelerator: 'CmdOrCtrl+,', click: send('menu', 'settings') };
+  const updateItem = { label: '업데이트 확인…', click: send('menu', 'checkUpdate') };
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(IS_MAC ? [{ label: app.name, submenu: [
-      { role: 'about', label: '이커머스 AI 계산기 정보' }, { type: 'separator' }, settingsItem,
+      { role: 'about', label: '이커머스 AI 계산기 정보' }, updateItem, { type: 'separator' }, settingsItem,
       { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
     ] }] : []),
     { label: '파일', submenu: [
@@ -363,6 +403,7 @@ function buildMenu() {
     ] },
     { role: 'viewMenu', label: '보기' },
     { role: 'windowMenu', label: '창' },
+    ...(IS_MAC ? [] : [{ label: '도움말', submenu: [updateItem, { label: `버전 ${app.getVersion()}`, enabled: false }] }]),
   ]));
 }
 
