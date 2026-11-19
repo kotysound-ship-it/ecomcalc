@@ -1,0 +1,76 @@
+{
+  "name": "ecom-calc",
+  "productName": "EcomCalc AI",
+  "version": "1.2.0",
+  "description": "이커머스 운영 특화 AI 계산기",
+  "main": "main.js",
+  "author": "ProperMarket",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/calc.test.js",
+    "dist": "electron-builder --mac dmg --arm64 --x64",
+    "dist:win": "electron-builder --win nsis --x64",
+    "test:e2e": "node test/run-e2e.js"
+  },
+  "build": {
+    "appId": "kr.co.propermarket.ecomcalc",
+    "productName": "EcomCalc AI",
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "build/icon.png",
+      "target": [
+        "dmg"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "CFBundleDisplayName": "이커머스 AI 계산기"
+      }
+    },
+    "dmg": {
+      "title": "이커머스 AI 계산기 ${version}"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "artifactName": "이커머스AI계산기-${version}-${arch}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "이커머스 AI 계산기",
+      "uninstallDisplayName": "이커머스 AI 계산기",
+      "artifactName": "이커머스AI계산기-Setup-${version}.${ext}",
+      "installerLanguages": [
+        "ko_KR"
+      ],
+      "language": "1042",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
+    "hyperformula": "^3.5.0"
+  }
+}

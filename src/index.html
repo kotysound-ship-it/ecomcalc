@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>이커머스 AI 계산기</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="titlebar">
+    <div class="brand"><span class="logo">₩</span> 이커머스 AI 계산기</div>
+    <div class="title-actions">
+      <button class="ghost ai-status" id="aiStatus" title="AI 연결 상태 — 눌러서 설정">AI 확인 중…</button>
+      <button class="ghost" id="btnOpenLedger" title="장부 열기 (⌘O)">📒 장부 열기</button>
+      <button class="ghost" id="btnHistory" title="기록 내역">🗂 기록 내역 <span class="badge" id="historyCount">0</span></button>
+      <button class="ghost" id="btnSettings" title="설정 (⌘,)">⚙️ 설정</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="main">
+      <section class="ai-bar" id="aiBar">
+        <span class="spark">✨</span>
+        <input id="aiInput" type="text" autocomplete="off" spellcheck="false"
+               placeholder="말로 입력하세요 — 예) 원가 8천원, 판매가 29,900원, 수수료 5.5%, 배송비 3천원이면 이익은?" />
+        <button class="primary small" id="aiGo">입력</button>
+        <kbd class="hint-kbd">⌘K</kbd>
+      </section>
+      <div class="ai-note" id="aiNote" hidden></div>
+
+      <section class="calc-head">
+        <div>
+          <h1 id="calcTitle"></h1>
+          <p id="calcDesc"></p>
+        </div>
+      </section>
+
+      <div class="presets" id="presets" hidden></div>
+
+      <section class="panes">
+        <div class="card inputs">
+          <div class="card-title">입력값 <span class="muted">· 입력하면 바로 계산돼요</span></div>
+          <form id="form" autocomplete="off"></form>
+          <button type="button" class="link" id="toggleAdvanced" hidden>고급 설정 보기</button>
+        </div>
+
+        <div class="card results">
+          <div class="card-title">결과</div>
+          <div class="primary-results" id="primaryResults"></div>
+          <div class="breakdown" id="breakdown" hidden></div>
+          <dl class="result-list" id="resultList"></dl>
+          <div class="actions">
+            <button class="primary" id="btnRecord" title="엑셀 장부에 함수 포함 기록 (⌘S)">📒 장부에 기록</button>
+            <button id="btnAnalyze" title="AI가 결과를 해석하고 개선안 제시 (⌘↩)">✨ AI 분석</button>
+            <button id="btnCopy" title="결과 복사">📋 복사</button>
+            <button id="btnReset" title="초기화 (⌘⌫)">↺ 초기화</button>
+          </div>
+          <input id="memo" class="memo" type="text" placeholder="메모 (선택) — 장부에 함께 기록돼요" />
+        </div>
+      </section>
+    </main>
+
+    <aside class="ai-panel" id="aiPanel" aria-hidden="true">
+      <div class="ai-panel-head">
+        <strong>✨ AI 수익성 어드바이저</strong>
+        <div>
+          <button class="ghost small" id="aiClear" title="대화 지우기">새 대화</button>
+          <button class="ghost small" id="aiClose" title="닫기">✕</button>
+        </div>
+      </div>
+      <div class="ai-thread" id="aiThread"></div>
+      <form class="ai-compose" id="aiCompose">
+        <textarea id="aiAsk" rows="2" placeholder="추가로 물어보세요 — 예) 쿠팡으로 옮기면? 1+1 행사하면 남아?"></textarea>
+        <button class="primary small" id="aiSend" type="submit">보내기</button>
+        <button class="small" id="aiStop" type="button" hidden>중지</button>
+      </form>
+    </aside>
+  </div>
+
+  <!-- 기록 내역 -->
+  <div class="modal" id="historyModal" hidden>
+    <div class="modal-box wide">
+      <div class="modal-head"><strong>🗂 기록 내역</strong><button class="ghost small" data-close>✕</button></div>
+      <p class="muted">장부에 기록한 계산입니다. 항목을 누르면 다시 불러옵니다.</p>
+      <div class="history-list" id="historyList"></div>
+      <div class="modal-foot">
+        <button class="danger" id="btnClearHistory">내역 비우기</button>
+        <span class="spacer"></span>
+        <button id="btnExport">전체를 새 엑셀로 내보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 설정 -->
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><strong>⚙️ 설정</strong><button class="ghost small" data-close>✕</button></div>
+      <div class="setting">
+        <span>AI 공급자</span>
+        <select id="aiProvider">
+          <option value="auto">자동 (추천) — 저장된 키 → 무료 로컬 AI 순으로 자동 연결</option>
+          <option value="anthropic">Anthropic Claude</option>
+          <option value="openai">OpenAI (ChatGPT)</option>
+          <option value="gemini">Google Gemini (무료 키 발급 가능)</option>
+          <option value="local">로컬 AI — Ollama (무료, 내 컴퓨터에서 실행)</option>
+          <option value="custom">OpenAI 호환 서버 (직접 입력)</option>
+        </select>
+        <small class="muted" id="aiActive"></small>
+      </div>
+      <div id="aiAutoInfo" class="setting info-box"></div>
+      <label class="setting" id="rowKey">
+        <span>API 키 <em class="muted" id="keyState"></em></span>
+        <input type="password" id="apiKey" placeholder="키 붙여넣기" autocomplete="off" />
+        <small class="muted">키는 이 컴퓨터의 보안 저장소(macOS 키체인 / Windows 자격 증명 보호)로 암호화되어 저장됩니다.
+          <a href="#" id="keyLink">키 발급받기 ↗</a></small>
+      </label>
+      <label class="setting" id="rowBase">
+        <span>서버 주소 (Base URL)</span>
+        <input type="text" id="aiBase" placeholder="https://api.example.com/v1" autocomplete="off" />
+        <small class="muted">OpenRouter, Groq, LM Studio 등 OpenAI 호환 /chat/completions 서버. 키가 필요 없으면 비워 두세요.</small>
+      </label>
+      <label class="setting" id="rowModel">
+        <span>모델</span>
+        <input type="text" id="aiModel" autocomplete="off" />
+        <small class="muted" id="modelHint">비워 두면 기본 모델을 사용합니다.</small>
+      </label>
+      <div class="row-btns" id="rowBtns"><button class="primary" id="btnSaveAI">연결 테스트 후 저장</button><button id="btnDeleteKey">키 삭제</button></div>
+      <hr />
+      <label class="setting">
+        <span>엑셀 장부 파일</span>
+        <code id="ledgerPath"></code>
+        <small class="muted">"장부에 기록" 시 이 파일에 계산기별 시트로 한 줄씩 추가됩니다. 결과 칸은 엑셀 함수로 들어가 입력값을 고치면 자동 재계산돼요.</small>
+      </label>
+      <div class="row-btns"><button id="btnChooseLedger">위치 변경…</button><button id="btnRevealLedger">Finder에서 보기</button></div>
+    </div>
+  </div>
+
+  <!-- AI 연결 안내 -->
+  <div class="modal" id="noAiModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><strong>✨ AI 연결하기</strong><button class="ghost small" data-close>✕</button></div>
+      <p class="muted">계산·장부 기록은 AI 없이도 모두 쓸 수 있어요. AI 기능(말로 입력, AI 분석)은 아래 중 하나로 무료 또는 유료로 연결하세요.</p>
+      <div class="choice">
+        <strong>① 무료 · 계정 없이 — 로컬 AI (Ollama)</strong>
+        <p>내 컴퓨터에서 AI를 실행합니다. 인터넷·키·요금 없음. 설치 후 앱이 <b>자동으로 연결</b>합니다. (모델 내려받기 약 3GB, 사양에 따라 응답이 느릴 수 있음)</p>
+        <ol><li>Ollama 설치 <a href="#" data-url="https://ollama.com/download">ollama.com/download ↗</a></li><li>터미널(명령 프롬프트)에서 <code>ollama pull gemma3:4b</code></li><li>이 앱으로 돌아오면 자동 연결 ✓</li></ol>
+      </div>
+      <div class="choice">
+        <strong>② 무료 키 — Google Gemini</strong>
+        <p>구글 로그인 → <b>「API 키 만들기」</b> → <b>복사</b>만 하고 이 앱으로 돌아오세요. 복사한 키를 앱이 알아보고 바로 연결해 드려요. (무료 사용량 한도 내)</p>
+        <div class="row-btns"><button data-url="https://aistudio.google.com/apikey">무료 키 받기 ↗</button><button class="primary" data-setup="gemini">키 입력하기</button></div>
+      </div>
+      <div class="choice">
+        <strong>③ 유료 키 — Claude / ChatGPT</strong>
+        <p>가장 정확한 분석. 사용량만큼 과금됩니다.</p>
+        <div class="row-btns"><button data-setup="anthropic">Claude 키 입력</button><button data-setup="openai">OpenAI 키 입력</button></div>
+      </div>
+      <div class="modal-foot"><span class="spacer"></span><button id="btnRecheckAI">다시 확인</button></div>
+    </div>
+  </div>
+
+  <!-- 복사한 키 감지 -->
+  <div class="modal" id="keyFoundModal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><strong>📋 복사한 API 키를 찾았어요</strong></div>
+      <p id="keyFoundText"></p>
+      <p class="muted small-note">연결 테스트 후 이 컴퓨터에 암호화해 저장하고, 보안을 위해 클립보드에서는 지웁니다.</p>
+      <p class="err-text" id="keyFoundErr" hidden></p>
+      <div class="modal-foot"><span class="spacer"></span><button id="btnKeyDecline">아니요</button><button class="primary" id="btnKeyAccept">이 키로 연결하기</button></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="calc.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

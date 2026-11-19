@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f83f1"/><stop offset="1" stop-color="#2a4fc0"/></linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#g)"/>
+  <rect x="230" y="210" width="564" height="190" rx="40" fill="#ffffff" opacity="0.95"/>
+  <text x="740" y="345" font-family="Helvetica Neue, Arial" font-weight="700" font-size="120" text-anchor="end" fill="#2a4fc0">₩%</text>
+  <g fill="#ffffff">
+    <rect x="230" y="450" width="160" height="120" rx="30" opacity=".9"/>
+    <rect x="432" y="450" width="160" height="120" rx="30" opacity=".9"/>
+    <rect x="634" y="450" width="160" height="120" rx="30" fill="#ffd166"/>
+    <rect x="230" y="610" width="160" height="120" rx="30" opacity=".9"/>
+    <rect x="432" y="610" width="160" height="120" rx="30" opacity=".9"/>
+    <rect x="634" y="610" width="160" height="280" rx="30" fill="#3ccf8e"/>
+    <rect x="230" y="770" width="362" height="120" rx="30" opacity=".9"/>
+  </g>
+  <path d="M770 140 l22 52 52 22 -52 22 -22 52 -22 -52 -52 -22 52 -22z" fill="#ffd166"/>
+</svg>

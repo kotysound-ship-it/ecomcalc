@@ -1,0 +1,23 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('api', {
+  parse: (text, current) => ipcRenderer.invoke('ai:parse', { text, current }),
+  chat: (id, messages) => ipcRenderer.send('ai:chat', { id, messages }),
+  abort: (id) => ipcRenderer.send('ai:abort', id),
+  onDelta: (cb) => ipcRenderer.on('ai:delta', (_e, d) => cb(d)),
+  onDone: (cb) => ipcRenderer.on('ai:done', (_e, d) => cb(d)),
+  onMenu: (cb) => ipcRenderer.on('menu', (_e, d) => cb(d)),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  saveAI: (opts) => ipcRenderer.invoke('settings:saveAI', opts),
+  platform: process.platform,
+  chooseLedger: () => ipcRenderer.invoke('ledger:choose'),
+  appendLedger: (records) => ipcRenderer.invoke('ledger:append', records),
+  exportLedger: (records) => ipcRenderer.invoke('ledger:export', records),
+  openLedger: () => ipcRenderer.invoke('ledger:open'),
+  revealLedger: () => ipcRenderer.invoke('ledger:reveal'),
+  detectKey: () => ipcRenderer.invoke('keydetect:check'),
+  acceptKey: () => ipcRenderer.invoke('keydetect:accept'),
+  declineKey: () => ipcRenderer.invoke('keydetect:decline'),
+  copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  openExternal: (url) => ipcRenderer.invoke('open:external', url),
+});
