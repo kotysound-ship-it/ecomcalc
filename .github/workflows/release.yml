@@ -20,6 +20,11 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed "s/{{VERSION}}/$VERSION/g" .github/release-notes.md > notes.md
+          # CHANGELOG.md의 "## <버전>" 항목을 「무엇이 바뀌었나요」로 추가
+          CHANGES=$(awk -v v="## $VERSION" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md)
+          if [ -n "$(echo "$CHANGES" | tr -d '[:space:]')" ]; then
+            { echo "## ✨ $VERSION 에서 무엇이 바뀌었나요?"; echo "$CHANGES"; echo; } >> notes.md
+          fi
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes
 
   build:
