@@ -31,6 +31,31 @@ const R = (id, v) => Object.fromEntries(Calc.run(id, v).map((o) => [o.key, o.val
   const r2 = R('profit', { price: '11000', cost: '5500', couponRate: '10', couponShare: '50' });
   near(r2.sellerCoupon, 550, 'seller coupon'); near(r2.netSales, 10450, 'net');
 }
+{
+  // 면세. 판매가 10000, 원가 5000, 정액 광고비 100,000 / 예상 50개 → 개당 광고비 2000, 이익 3000
+  const r = R('profit', { taxType: '면세', price: '10000', cost: '5000', adFixed: '100000', salesQty: '50' });
+  near(r.adCost, 2000, 'ad unit'); near(r.profit, 3000, 'profit with ad'); near(r.totalProfit, 150000, 'total profit');
+  // 광고비 빼기 전 개당 5000 → 손익분기 100,000/5000 = 20개
+  near(r.bepQty, 20, 'bep qty');
+  // 판매수량 미입력: 개당 이익에 정액 광고비 미반영, 손익분기 수량은 표시
+  const r2 = R('profit', { taxType: '면세', price: '10000', cost: '5000', adFixed: '100000' });
+  near(r2.profit, 5000, 'profit no qty'); near(r2.bepQty, 20, 'bep qty no qty'); assert.strictEqual(r2.totalProfit, null);
+  // 광고비 10% (실판매가 기준) → 1000
+  const r3 = R('profit', { taxType: '면세', price: '10000', cost: '5000', adRate: '10' });
+  near(r3.adCost, 1000, 'ad rate'); near(r3.profit, 4000, 'profit ad rate');
+  // 손익분기 ROAS: 광고비 빼기 전 이익 5000 → 매출 10000 / 5000 = 200%
+  near(r3.bepRoas, 2, 'bep roas');
+  // 손익분기 판매가: 0.9P - 5000 = 0 (광고비 10%)
+  near(r3.bepPrice, 5000 / 0.9, 'bep price with ad rate');
+  // 정액 쿠폰 3000원, 셀러 100% 부담 → 정산매출 7000, 이익 2000
+  const r4 = R('profit', { taxType: '면세', price: '10000', cost: '5000', couponFixed: '3000' });
+  near(r4.couponAmt, 3000, 'coupon fixed'); near(r4.netSales, 7000, 'net with fixed coupon'); near(r4.profit, 2000, 'profit fixed coupon');
+  near(r4.bepPrice, 8000, 'bep with fixed coupon');
+  // 목표 20%: P-3000-5000 = 0.2(P-3000) → P = 9250
+  near(R('profit', { taxType: '면세', price: '10000', cost: '5000', couponFixed: '3000', targetMargin: '20' }).targetPrice, 9250, 'target with fixed coupon');
+  // 과세: 원가 5500, 정액 광고비 110,000 / 0개 → 기여이익 5000, 광고 실부담 100,000 → 20개
+  near(R('profit', { price: '11000', cost: '5500', adFixed: '110000' }).bepQty, 20, 'bep qty taxed');
+}
 near(R('growth', { prev: '100', curr: '125' }).rate, 0.25, 'growth');
 near(R('vat', { amount: '11000' }).supply, 10000, 'vat supply');
 near(R('vat', { mode: '공급가액(VAT별도)', amount: '10000' }).total, 11000, 'vat total');
@@ -103,6 +128,13 @@ console.log(`✓ 엑셀 수식 == 앱 계산: ${checked}개 값 일치`);
   const pc = cols.find((c) => c.key === 'profit').letter;
   const cell = ws.getCell(`${pc}3`).value;
   assert.ok(cell.formula && /N\d|\d/.test(cell.formula), 'formula stored');
+  // 예전 양식 시트가 있으면 이름을 바꿔 보관하고 새 양식으로 기록
+  ws.getRow(1).getCell(cols.length + 1).value = '예전 열';
+  await wb.xlsx.writeFile(file);
+  const res2 = await Excel.appendRecords(file, [{ calc: 'profit', values: { name: 'C', price: '10000', cost: '5000' } }]);
+  assert.strictEqual(res2[0].row, 2);
+  const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.readFile(file);
+  assert.ok(wb2.getWorksheet('영업이익률_이전양식'), '예전 시트 보관');
   console.log(`✓ xlsx 생성/추가 OK → ${file}`);
   console.log(`  예) ${pc}3 = ${cell.formula}  (값 ${Math.round(cell.result)})`);
 })().catch((e) => { console.error(e); process.exit(1); });

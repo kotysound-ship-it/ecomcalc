@@ -39,34 +39,45 @@
         { key: 'feeRate', label: '판매수수료', type: 'percent', placeholder: '5.5' },
         { key: 'etcFeeRate', label: '기타수수료', type: 'percent', hint: '결제·카드·연동 수수료 등' },
         { key: 'shipping', label: '배송비(셀러부담)', type: 'money', hint: '택배비+포장재' },
-        { key: 'couponRate', label: '쿠폰 할인율', type: 'percent' },
-        { key: 'couponShare', label: '자체 쿠폰 분담율', type: 'percent', hint: '쿠폰 중 셀러 부담 비율. 100이면 전액 셀러 부담', default: 100 },
-        { key: 'gift', label: '사은품 비용', type: 'money' },
-        { key: 'otherCost', label: '기타비용(광고비 등)', type: 'money', hint: '개당 광고비·인건비 등' },
-        { key: 'targetMargin', label: '목표 영업이익률', type: 'percent', default: 20, hint: '추천 판매가 계산용' },
+        { key: 'couponRate', label: '쿠폰 할인율', type: 'percent', hint: '실판매가에서 %로 깎아 주는 쿠폰' },
+        { key: 'couponFixed', label: '쿠폰 할인액(정액)', type: 'money', hint: '주문 1건에 금액으로 깎아 주는 쿠폰. 예) 3,000원 할인 쿠폰. 할인율 쿠폰과 함께 쓰면 둘 다 적용' },
+        { key: 'couponShare', label: '자체 쿠폰 분담율', type: 'percent', hint: '쿠폰 할인액 중 셀러가 부담하는 비율. 100이면 전액 셀러 부담, 플랫폼 쿠폰이면 0', default: 100 },
+        { key: 'gift', label: '사은품 비용', type: 'money', hint: '상품 1개에 함께 보내는 사은품 원가' },
+        { key: 'otherCost', label: '기타비용(개당)', type: 'money', hint: '포장재·인건비 등 상품 1개당 드는 비용. 광고비는 아래 광고비 칸에 따로 넣어 주세요' },
+        { key: 'adRate', label: '광고비(매출 대비 %)', type: 'percent', hint: '실판매가 기준 광고비 비율. 예) 매출의 10%를 광고비로 쓰면 10' },
+        { key: 'adFixed', label: '광고비(정액·기간 총액)', type: 'money', hint: '한 달 광고비처럼 기간 전체에 쓰는 금액. 예상 판매수량으로 나눠 개당 광고비로 계산하고, 손익분기 판매수량을 알려 드려요' },
+        { key: 'salesQty', label: '예상 판매수량', type: 'number', unit: '개', hint: '정액 광고비를 쓰는 기간 동안 팔 것으로 예상하는 수량(개). 비우면 개당 광고비에 정액 광고비를 넣지 않아요' },
+        { key: 'targetMargin', label: '목표 영업이익률', type: 'percent', default: 20, hint: '목표이익률 추천 판매가를 계산할 때 쓰는 값' },
         { key: 'vatDeduct', label: '비용 매입세액 공제', type: 'select', options: YN, default: 'Y', advanced: true, hint: '과세 사업자가 비용의 부가세를 공제받는지' },
       ],
       compute(v) {
         const price = n(v.price);
         const P = n(v.salePrice) > 0 ? n(v.salePrice) : price;
-        const cr = pct(v.couponRate), sh = pct(v.couponShare);
-        const fr = pct(v.feeRate), er = pct(v.etcFeeRate);
+        const cr = pct(v.couponRate), cf = n(v.couponFixed), sh = pct(v.couponShare);
+        const fr = pct(v.feeRate), er = pct(v.etcFeeRate), ar = pct(v.adRate);
         const t = v.taxType === '면세' ? 0 : 1;
         const k = t * (v.vatDeduct === 'N' ? 0 : 1);
-        const couponAmt = P * cr;
+        const q = 1 - k / 11; // 비용의 부가세 공제 후 실부담 비율
+        const qty = n(v.salesQty);
+        const adFixedUnit = qty > 0 ? n(v.adFixed) / qty : 0;
+        const couponAmt = P * cr + cf;
         const sellerCoupon = couponAmt * sh;
         const netSales = P - sellerCoupon;
         const fee = netSales * fr;
         const etcFee = netSales * er;
-        const F = n(v.cost) + n(v.shipping) + n(v.gift) + n(v.otherCost);
-        const totalCost = F + fee + etcFee;
+        const adCost = P * ar + adFixedUnit;
+        const F = n(v.cost) + n(v.shipping) + n(v.gift) + n(v.otherCost) + adFixedUnit;
+        const totalCost = F + fee + etcFee + P * ar;
         const vat = t * netSales / 11 - k * totalCost / 11;
         const profit = netSales - totalCost - vat;
+        // 이익 = a·P − b (P: 실판매가)
         const s = 1 - cr * sh;
-        const a = s * (1 - (fr + er) * (1 - k / 11) - t / 11);
-        const b = F * (1 - k / 11);
+        const m = 1 - t / 11 - (fr + er) * q;
+        const a = m * s - q * ar;
+        const b = m * sh * cf + q * F;
         const tm = pct(v.targetMargin);
-        const profitBeforeAd = profit + n(v.otherCost) * (1 - k / 11);
+        const profitBeforeAd = profit + adCost * q;
+        const contribution = profit + adFixedUnit * q; // 정액 광고비를 빼기 전 개당 이익
         return {
           realPrice: P,
           discountRate: price > 0 && n(v.salePrice) > 0 ? (price - P) / price : 0,
@@ -75,47 +86,56 @@
           netSales,
           fee,
           etcFee,
+          adCost,
           vat,
           totalCost: totalCost + vat,
           profit,
           margin: div(profit, netSales),
+          totalProfit: qty > 0 ? profit * qty : null,
+          bepQty: n(v.adFixed) > 0 && contribution > 0 ? Math.ceil(n(v.adFixed) * q / contribution - 1e-9) : null,
           costRatio: div(n(v.cost), netSales),
           bepPrice: a > 0 ? b / a : null,
-          targetPrice: a - tm * s > 0 ? roundTo(b / (a - tm * s), 10, 'up') : null,
-          bepRoas: n(v.otherCost) > 0 && profitBeforeAd > 0 ? netSales / profitBeforeAd : null,
+          targetPrice: a - tm * s > 0 ? roundTo((b - tm * sh * cf) / (a - tm * s), 10, 'up') : null,
+          bepRoas: profitBeforeAd > 0 ? netSales * q / profitBeforeAd : null,
         };
       },
       outputs: [
-        { key: 'profit', label: '영업이익', type: 'money', primary: true, tone: 'sign',
+        { key: 'profit', label: '영업이익(개당)', type: 'money', primary: true, tone: 'sign',
           excel: (c) => `${c('netSales')}-${c('totalCost')}` },
         { key: 'margin', label: '영업이익률', type: 'percent', primary: true, tone: 'margin',
           excel: (c) => xdiv(c('profit'), c('netSales')) },
-        { key: 'realPrice', label: '실판매가', type: 'money',
+        { key: 'realPrice', label: '실판매가', type: 'money', hint: '할인가가 있으면 할인가, 없으면 판매가',
           excel: (c) => `IF(N(${c('salePrice')})>0,${c('salePrice')},${c('price')})` },
         { key: 'discountRate', label: '할인율(판매가 대비)', type: 'percent',
           excel: (c) => `IF(AND(N(${c('salePrice')})>0,${c('price')}>0),(${c('price')}-${c('realPrice')})/${c('price')},0)` },
-        { key: 'couponAmt', label: '쿠폰 할인액(전체)', type: 'money',
-          excel: (c) => `${c('realPrice')}*N(${c('couponRate')})` },
-        { key: 'sellerCoupon', label: '셀러부담 쿠폰', type: 'money',
+        { key: 'couponAmt', label: '쿠폰 할인액(전체)', type: 'money', hint: '할인율 쿠폰 + 정액 쿠폰. 플랫폼 부담분 포함',
+          excel: (c) => `${c('realPrice')}*N(${c('couponRate')})+N(${c('couponFixed')})` },
+        { key: 'sellerCoupon', label: '셀러부담 쿠폰', type: 'money', hint: '쿠폰 할인액 × 자체 쿠폰 분담율',
           excel: (c) => `${c('couponAmt')}*N(${c('couponShare')})` },
-        { key: 'netSales', label: '정산기준 매출', type: 'money',
+        { key: 'netSales', label: '정산기준 매출', type: 'money', hint: '실판매가에서 셀러부담 쿠폰을 뺀 금액. 수수료는 이 금액 기준',
           excel: (c) => `${c('realPrice')}-${c('sellerCoupon')}` },
         { key: 'fee', label: '판매수수료', type: 'money',
           excel: (c) => `${c('netSales')}*N(${c('feeRate')})` },
         { key: 'etcFee', label: '기타수수료', type: 'money',
           excel: (c) => `${c('netSales')}*N(${c('etcFeeRate')})` },
-        { key: 'vat', label: '부가세 납부(예상)', type: 'money',
-          excel: (c) => `IF(${c('taxType')}="면세",0,${c('netSales')}/11-IF(${c('vatDeduct')}="N",0,(N(${c('cost')})+N(${c('shipping')})+N(${c('gift')})+N(${c('otherCost')})+${c('fee')}+${c('etcFee')})/11))` },
+        { key: 'adCost', label: '광고비(개당)', type: 'money', hint: '실판매가 × 광고비% + 정액 광고비 ÷ 예상 판매수량',
+          excel: (c) => `${c('realPrice')}*N(${c('adRate')})+IF(N(${c('salesQty')})>0,N(${c('adFixed')})/${c('salesQty')},0)` },
+        { key: 'vat', label: '부가세 납부(예상)', type: 'money', hint: '매출 부가세 − 비용 매입세액(공제 시). 음수면 환급 예상',
+          excel: (c) => `IF(${c('taxType')}="면세",0,${c('netSales')}/11-IF(${c('vatDeduct')}="N",0,(${baseX(c)}+${c('adCost')}+${c('fee')}+${c('etcFee')})/11))` },
         { key: 'totalCost', label: '총비용(부가세 포함)', type: 'money',
-          excel: (c) => `N(${c('cost')})+N(${c('shipping')})+N(${c('gift')})+N(${c('otherCost')})+${c('fee')}+${c('etcFee')}+${c('vat')}` },
-        { key: 'costRatio', label: '원가율', type: 'percent',
+          excel: (c) => `${baseX(c)}+${c('adCost')}+${c('fee')}+${c('etcFee')}+${c('vat')}` },
+        { key: 'costRatio', label: '원가율', type: 'percent', hint: '상품원가 ÷ 정산기준 매출',
           excel: (c) => xdiv(`N(${c('cost')})`, c('netSales')) },
-        { key: 'bepPrice', label: '손익분기 판매가', type: 'money', hint: '이익 0원이 되는 실판매가',
+        { key: 'totalProfit', label: '예상 총 영업이익', type: 'money', tone: 'sign', hint: '개당 영업이익 × 예상 판매수량. 예상 판매수량을 넣으면 표시',
+          excel: (c) => `IF(N(${c('salesQty')})>0,${c('profit')}*${c('salesQty')},"")` },
+        { key: 'bepQty', label: '손익분기 판매수량', type: 'number', unit: '개', hint: '정액 광고비를 회수하려면 최소 몇 개를 팔아야 하는지. 이보다 많이 팔아야 이익',
+          excel: (c) => `IF(N(${c('adFixed')})<=0,"",IF(${contribX(c)}<=0,"",CEILING(N(${c('adFixed')})*(1-${kx(c)}/11)/${contribX(c)}-0.000000001,1)))` },
+        { key: 'bepPrice', label: '손익분기 판매가', type: 'money', hint: '영업이익이 0원이 되는 실판매가. 이보다 싸게 팔면 적자',
           excel: (c) => profitCoef(c, 'bep') },
-        { key: 'targetPrice', label: '목표이익률 추천 판매가', type: 'money', hint: '목표 영업이익률을 맞추는 실판매가(10원 올림)',
+        { key: 'targetPrice', label: '목표이익률 추천 판매가', type: 'money', hint: '목표 영업이익률을 맞추려면 받아야 하는 실판매가(10원 단위 올림)',
           excel: (c) => profitCoef(c, 'target') },
-        { key: 'bepRoas', label: '손익분기 ROAS', type: 'percent', hint: '광고비(기타비용) 기준 최소 ROAS',
-          excel: (c) => `IF(N(${c('otherCost')})<=0,"",IF((${c('profit')}+N(${c('otherCost')})*(1-${kx(c)}/11))<=0,"",${c('netSales')}/(${c('profit')}+N(${c('otherCost')})*(1-${kx(c)}/11))))` },
+        { key: 'bepRoas', label: '손익분기 ROAS', type: 'percent', hint: '광고 매출 ÷ 광고비가 이 값보다 낮으면 광고할수록 적자. 광고비를 빼기 전 이익으로 계산',
+          excel: (c) => `IF((${c('profit')}+${c('adCost')}*(1-${kx(c)}/11))<=0,"",${c('netSales')}*(1-${kx(c)}/11)/(${c('profit')}+${c('adCost')}*(1-${kx(c)}/11)))` },
       ],
     },
 
@@ -304,14 +324,27 @@
 
   // 영업이익 선형식 계수 (엑셀 손익분기/추천가 공식). profit = a·P − b
   function kx(c) { return `IF(${c('taxType')}="면세",0,IF(${c('vatDeduct')}="N",0,1))`; }
+  // 개당 고정비(정액 광고비 개당 몫 포함)
+  function fixedX(c) {
+    return `(${baseX(c)}+${adUnitX(c)})`;
+  }
+  // 상품 1개당 고정비(광고비 제외)
+  function baseX(c) { return `(N(${c('cost')})+N(${c('shipping')})+N(${c('gift')})+N(${c('otherCost')}))`; }
+  function adUnitX(c) { return `IF(N(${c('salesQty')})>0,N(${c('adFixed')})/${c('salesQty')},0)`; }
+  function contribX(c) {
+    return `(${c('profit')}+IF(N(${c('salesQty')})>0,N(${c('adFixed')})/${c('salesQty')},0)*(1-${kx(c)}/11))`;
+  }
   function profitCoef(c, which) {
     const t = `IF(${c('taxType')}="면세",0,1)`;
-    const s = `(1-N(${c('couponRate')})*N(${c('couponShare')}))`;
-    const a = `(${s}*(1-(N(${c('feeRate')})+N(${c('etcFeeRate')}))*(1-${kx(c)}/11)-${t}/11))`;
-    const b = `((N(${c('cost')})+N(${c('shipping')})+N(${c('gift')})+N(${c('otherCost')}))*(1-${kx(c)}/11))`;
+    const q = `(1-${kx(c)}/11)`;
+    const sh = `N(${c('couponShare')})`;
+    const s = `(1-N(${c('couponRate')})*${sh})`;
+    const m = `(1-${t}/11-(N(${c('feeRate')})+N(${c('etcFeeRate')}))*${q})`;
+    const a = `(${m}*${s}-${q}*N(${c('adRate')}))`;
+    const b = `(${m}*${sh}*N(${c('couponFixed')})+${q}*${fixedX(c)})`;
     if (which === 'bep') return `IF(${a}<=0,"",${b}/${a})`;
     const d = `(${a}-N(${c('targetMargin')})*${s})`;
-    return `IF(${d}<=0,"",CEILING(${b}/${d}-0.000001,10))`;
+    return `IF(${d}<=0,"",CEILING((${b}-N(${c('targetMargin')})*${sh}*N(${c('couponFixed')}))/${d}-0.000001,10))`;
   }
 
   function defaults(id) {
@@ -340,14 +373,14 @@
     const calc = CALCS[id];
     const v = Object.assign(defaults(id), values || {});
     const r = calc.compute(v);
-    return calc.outputs.map((o) => Object.assign({}, o, { value: r[o.key], text: fmt(r[o.key], o.type) }));
+    return calc.outputs.map((o) => { const text = fmt(r[o.key], o.type); return Object.assign({}, o, { value: r[o.key], text: o.unit && text !== '—' ? text + o.unit : text }); });
   }
 
   function summaryText(id, values) {
     const calc = CALCS[id];
     const lines = [`[${calc.name} 계산기]`];
     for (const f of calc.fields) {
-      if (values[f.key] !== '' && values[f.key] !== undefined) lines.push(`${f.label}: ${fmtInput(values[f.key], f.type)}`);
+      if (values[f.key] !== '' && values[f.key] !== undefined) lines.push(`${f.label}: ${fmtInput(values[f.key], f.type)}${f.unit || ''}`);
     }
     lines.push('— 결과 —');
     for (const o of run(id, values)) lines.push(`${o.label}: ${o.text}`);

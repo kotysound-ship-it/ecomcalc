@@ -78,6 +78,60 @@ module.exports = ({ app, win, clipboard }) => {
     });
 
     // ───────── 2. 입력 유지 (상품명 버그 회귀) ─────────
+    await step('영업이익률: 정액 광고비 + 예상 판매수량 → 개당 광고비·손익분기 판매수량', async () => {
+      const r = await js(`${H} nav('영업이익률'); $('#btnReset').click();
+        type('f_price','39900'); type('f_salePrice','19900'); type('f_cost','7500'); type('f_feeRate','10'); type('f_shipping','2500'); type('f_targetMargin','10');
+        type('f_adFixed','1000000'); const noQty = { big: bigs(), bep: $('#resultList [data-key="bepQty"] .v').textContent };
+        type('f_salesQty','100');
+        const row = (k) => $('#resultList [data-key="' + k + '"] .v').textContent;
+        return { noQty, big: bigs(), ad: row('adCost'), bep: row('bepQty'), total: row('totalProfit'), unit: document.querySelector('#f_salesQty').parentElement.querySelector('.unit').textContent };`);
+      ok(r.noQty.big[0] === '7,191원' && r.noQty.bep === '127개', JSON.stringify(r.noQty));
+      ok(r.big[0] === '-1,900원' && r.ad === '10,000원' && r.bep === '127개' && r.total === '-190,000원' && r.unit === '개', JSON.stringify(r));
+      await shot('profit-ads');
+      return `수량 없음: 개당 이익 ${r.noQty.big[0]}, 손익분기 ${r.noQty.bep} / 100개: 개당 ${r.big[0]}, 광고비 ${r.ad}, 총 ${r.total}`;
+    });
+    await step('영업이익률: 광고비 %·정액 쿠폰', async () => {
+      const r = await js(`${H} $('#btnReset').click(); seg('taxType','면세'); type('f_price','10000'); type('f_cost','5000'); type('f_adRate','10'); const a = bigs()[0];
+        type('f_adRate',''); type('f_couponFixed','3000'); const row = (k) => $('#resultList [data-key="' + k + '"] .v').textContent;
+        return { a, b: bigs()[0], net: row('netSales') };`);
+      ok(r.a === '4,000원' && r.b === '2,000원' && r.net === '7,000원', JSON.stringify(r));
+      await js(`${H} $('#btnReset').click();`);
+      return `광고비 10% → ${r.a}, 정액 쿠폰 3,000원 → ${r.b}`;
+    });
+    await step('「?」 아이콘: 마우스를 올리면 설명 말풍선 (입력란·결과 모두)', async () => {
+      const r = await js(`${H}
+        const hover = (el) => { el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); const t = $('#tip'); return t.hidden ? '' : t.textContent; };
+        const a = hover(document.querySelector('#form .help'));
+        const b = hover($('#resultList [data-key="bepRoas"] .help'));
+        document.body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const icons = document.querySelectorAll('#resultList .help').length;
+        const plain = [...document.querySelectorAll('#resultList dt')].some((d) => / \?$/.test(d.textContent.trim()) && !d.querySelector('.help'));
+        return { a, b, hidden: $('#tip').hidden, icons, style: getComputedStyle($('#resultList .help')).borderRadius };`);
+      ok(r.a.length > 5 && /적자/.test(r.b) && r.hidden && r.icons >= 3 && r.style === '50%', JSON.stringify(r));
+      await js(`${H} $('#resultList [data-key="bepRoas"] .help').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));`);
+      await shot('tooltip');
+      await js(`document.body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));`);
+      return `입력 「${r.a}」 / 결과 「${r.b}」`;
+    });
+    await step('결과 ★ 강조: 기본 강조 → 클릭으로 추가·해제 → 다시 열어도 유지', async () => {
+      const r = await js(`${H} type('f_price','29900'); type('f_cost','9000');
+        const pinned = () => [...document.querySelectorAll('#resultList .row.pinned')].map((x) => x.dataset.key);
+        const cards = () => [...document.querySelectorAll('#pinnedResults .pin-card')].map((x) => x.dataset.key);
+        const def = pinned();
+        $('#resultList [data-key="netSales"]').click();
+        const added = { rows: pinned(), cards: cards() };
+        $('#resultList [data-key="bepRoas"] .help').click();
+        const helpClick = pinned();
+        $('#resultList [data-key="bepRoas"]').click();
+        nav('마진율'); nav('영업이익률');
+        return { def, added, helpClick, after: pinned(), saved: JSON.parse(localStorage.getItem('pins')).profit };`);
+      ok(r.def.join() === 'bepPrice,bepRoas', '기본: ' + r.def);
+      ok(r.added.rows.includes('netSales') && r.added.cards.includes('netSales'), JSON.stringify(r.added));
+      ok(r.helpClick.length === r.added.rows.length, '「?」 클릭이 강조를 바꿈');
+      ok(r.after.slice().sort().join() === 'bepPrice,netSales' && r.saved.slice().sort().join() === 'bepPrice,netSales', JSON.stringify(r));
+      await shot('pinned');
+      return `기본 [${r.def}] → 정산기준 매출 추가, 손익분기 ROAS 해제 → 유지 [${r.after}]`;
+    });
     await step('입력값 저장·유지 (상품명 수정 반영)', async () => {
       const r = await js(`${H} nav('영업이익률'); type('f_name', '채움 서리태콩물두유'); type('f_name', '채움 서리태콩물두유 1L');
         nav('마진율'); nav('영업이익률'); return [document.getElementById('f_name').value, JSON.parse(localStorage.getItem('values')).profit.name];`);
@@ -131,7 +185,7 @@ module.exports = ({ app, win, clipboard }) => {
       const ws = wb.getWorksheet('영업이익률');
       const hdr = ws.getRow(1).values; const col = (label) => hdr.findIndex((h) => typeof h === 'string' && h.startsWith(label));
       const r2 = ws.getRow(2), r3 = ws.getRow(3);
-      const profit = r2.getCell(col('영업이익 (')).value;
+      const profit = r2.getCell(col('영업이익(개당)')).value;
       ok(names[0] === '요약' && names.includes('부가세'), '시트 ' + names);
       ok(r2.getCell(col('상품명')).value === '장부상품A' && r3.getCell(col('상품명')).value === '장부상품B', '상품명');
       ok(r2.getCell(col('메모')).value === '첫 기록', '메모');

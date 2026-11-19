@@ -45,6 +45,29 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, opts.ms || 3500);
   }
 
+  // ───────── 「?」 도움말 아이콘 + 말풍선 ─────────
+  function helpIcon(text) {
+    const h = document.createElement('span');
+    h.className = 'help'; h.textContent = '?'; h.dataset.tip = text;
+    h.tabIndex = 0; h.setAttribute('role', 'img'); h.setAttribute('aria-label', '도움말: ' + text);
+    h.onclick = (e) => { e.preventDefault(); e.stopPropagation(); }; // 라벨/행 클릭으로 번지지 않게
+    return h;
+  }
+  const tip = document.createElement('div'); tip.id = 'tip'; tip.hidden = true; document.body.append(tip);
+  let tipFor = null;
+  function showTip(el) {
+    tipFor = el; tip.textContent = el.dataset.tip; tip.hidden = false;
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = r.left + r.width / 2 - w / 2; x = Math.max(8, Math.min(x, innerWidth - w - 8));
+    let y = r.top - h - 8; if (y < 8) y = r.bottom + 8;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }
+  function hideTip() { tipFor = null; tip.hidden = true; }
+  document.addEventListener('mouseover', (e) => { const el = e.target.closest && e.target.closest('[data-tip]'); if (el) { if (el !== tipFor) showTip(el); } else if (tipFor) hideTip(); });
+  document.addEventListener('focusin', (e) => { if (e.target.dataset && e.target.dataset.tip) showTip(e.target); });
+  document.addEventListener('focusout', (e) => { if (e.target === tipFor) hideTip(); });
+  document.addEventListener('scroll', hideTip, true);
+
   // ───────── sidebar ─────────
   function renderSidebar() {
     const nav = $('#sidebar');
@@ -93,7 +116,7 @@
       const label = document.createElement('label');
       label.htmlFor = 'f_' + f.key;
       label.textContent = f.label;
-      if (f.hint) { const h = document.createElement('span'); h.className = 'help'; h.textContent = '?'; h.title = f.hint; label.append(h); }
+      if (f.hint) label.append(helpIcon(f.hint));
       wrap.append(label);
 
       if (f.type === 'select' && f.options.length <= 4) {
@@ -120,7 +143,7 @@
         else {
           input.inputMode = 'decimal';
           input.value = withCommas(v[f.key] || '');
-          const unit = f.type === 'money' ? '원' : f.type === 'percent' ? '%' : '';
+          const unit = f.unit || (f.type === 'money' ? '원' : f.type === 'percent' ? '%' : '');
           if (unit) { input.classList.add('has-unit'); const u = document.createElement('span'); u.className = 'unit'; u.textContent = unit; iw.append(u); }
           input.oninput = () => {
             let raw = parseNum(input.value);
@@ -215,24 +238,57 @@
     return '';
   }
 
+  // 사용자가 ★로 고정한 결과 행 (계산기별, 없으면 기본값)
+  const DEFAULT_PINS = { profit: ['bepPrice', 'bepRoas'] };
+  state.pins = store.get('pins', {});
+  const pinsOf = (id) => state.pins[id] || DEFAULT_PINS[id] || [];
+  function togglePin(key) {
+    const cur = pinsOf(state.calc);
+    state.pins[state.calc] = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key];
+    store.set('pins', state.pins);
+    compute();
+  }
+
   function compute() {
     const v = valuesOf(state.calc);
     const res = Calc.run(state.calc, v);
+    const pins = pinsOf(state.calc);
     const prim = $('#primaryResults'); prim.innerHTML = '';
+    const pinBox = $('#pinnedResults'); pinBox.innerHTML = '';
     const list = $('#resultList'); list.innerHTML = '';
     res.forEach((o) => {
       if (o.primary) {
         const d = document.createElement('div'); d.className = 'big ' + toneClass(o);
         d.innerHTML = `<div class="lbl">${o.label}</div><div class="val">${o.text}</div>`;
         prim.append(d);
-      } else {
-        const dt = document.createElement('dt'); dt.textContent = o.label;
-        if (o.hint) { const h = document.createElement('span'); h.className = 'help'; h.textContent = '?'; h.title = o.hint; dt.append(h); }
-        const dd = document.createElement('dd'); dd.textContent = o.text;
-        if (typeof o.value === 'number' && o.value < 0) dd.className = 'neg';
-        list.append(dt, dd);
+        return;
+      }
+      const pinned = pins.includes(o.key);
+      const row = document.createElement('div');
+      row.className = 'row' + (pinned ? ' pinned' : ''); row.dataset.key = o.key;
+      const dt = document.createElement('dt');
+      const name = document.createElement('span'); name.textContent = o.label; dt.append(name);
+      if (o.hint) dt.append(helpIcon(o.hint));
+      const dd = document.createElement('dd');
+      const val = document.createElement('span'); val.className = 'v'; val.textContent = o.text;
+      if (typeof o.value === 'number' && o.value < 0) val.classList.add('neg');
+      const star = document.createElement('button');
+      star.type = 'button'; star.className = 'star'; star.textContent = pinned ? '★' : '☆';
+      star.setAttribute('aria-label', pinned ? `${o.label} 강조 해제` : `${o.label} 강조`);
+      dd.append(val, star);
+      row.append(dt, dd);
+      row.onclick = () => togglePin(o.key);
+      list.append(row);
+      if (pinned) {
+        const c = document.createElement('div'); c.className = 'pin-card ' + toneClass(o); c.dataset.key = o.key;
+        c.innerHTML = `<div class="lbl"></div><div class="val"></div>`;
+        c.querySelector('.lbl').textContent = '★ ' + o.label; c.querySelector('.val').textContent = o.text;
+        if (typeof o.value === 'number' && o.value < 0) c.classList.add('neg');
+        c.onclick = () => { const r = list.querySelector(`[data-key="${o.key}"]`); if (r) { r.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); r.classList.remove('flash'); void r.offsetWidth; r.classList.add('flash'); } };
+        pinBox.append(c);
       }
     });
+    pinBox.hidden = !pinBox.children.length;
     renderBreakdown(res, v);
   }
 
@@ -246,6 +302,7 @@
       ['원가', Calc.num(v.cost), 'var(--c1)'],
       ['수수료', r.fee + r.etcFee, 'var(--c2)'],
       ['배송비', Calc.num(v.shipping), 'var(--c3)'],
+      ['광고비', r.adCost || 0, 'var(--c7)'],
       ['사은품·기타', Calc.num(v.gift) + Calc.num(v.otherCost), 'var(--c4)'],
       ['부가세', Math.max(0, r.vat), 'var(--c5)'],
       ['영업이익', Math.max(0, r.profit), 'var(--c6)'],

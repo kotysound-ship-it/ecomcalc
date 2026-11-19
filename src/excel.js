@@ -49,6 +49,17 @@ function ensureSheet(wb, id) {
   const name = sheetName(id);
   let ws = wb.getWorksheet(name);
   const cols = layout(id);
+  // 앱 업데이트로 입력·결과 항목이 바뀌었으면 기존 시트는 이름을 바꿔 보관하고 새 양식으로 시작
+  if (ws) {
+    const header = ws.getRow(1);
+    const same = cols.length === header.cellCount && cols.every((c) => String(header.getCell(c.index).value || '') === c.label);
+    if (!same) {
+      let i = 1, old;
+      do { old = `${name}_이전양식${i > 1 ? i : ''}`; i++; } while (wb.getWorksheet(old));
+      ws.name = old;
+      ws = null;
+    }
+  }
   if (!ws) {
     ws = wb.addWorksheet(name, { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
     const header = ws.getRow(1);
