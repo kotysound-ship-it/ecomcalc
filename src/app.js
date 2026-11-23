@@ -19,6 +19,18 @@
     thread: [],
   };
   if (!CALCS[state.calc]) state.calc = 'profit';
+  // v1.5: 목표 달성의 목표·실적은 원 → 100만원 단위 입력으로 바뀜. 예전에 저장한 값을 한 번 변환
+  if (store.get('valuesVer', 1) < 2) {
+    const conv = (vals) => {
+      if (!vals) return;
+      ['goal', 'actual'].forEach((k) => { if (vals[k] !== undefined && vals[k] !== '' && isFinite(Number(vals[k]))) vals[k] = String(Number(vals[k]) / Calc.MILLION); });
+    };
+    conv(state.values.target);
+    state.history.forEach((r) => { if (r.calc === 'target') conv(r.values); });
+    store.set('values', state.values); store.set('history', state.history); store.set('valuesVer', 2);
+  }
+  // AI 개인정보 보호: off(끄기) · name(상품명 가리기, 기본) · strict(상품명+금액 가리기)
+  state.privacy = store.get('privacy', 'name');
   // 계산기별 값 객체는 항상 같은 객체를 유지한다(폼 핸들러가 이 객체를 직접 수정함)
   const valuesOf = (id) => {
     const cur = state.values[id] || (state.values[id] = {});
@@ -112,14 +124,28 @@
 
     calc.fields.forEach((f) => {
       const wrap = document.createElement('div');
-      wrap.className = 'field' + (f.type === 'text' ? ' full' : '') + (f.advanced ? ' advanced' : '') + (aiFilled.includes(f.key) ? ' filled-by-ai' : '');
+      wrap.className = 'field' + (f.type === 'text' || f.type === 'channels' ? ' full' : '') + (f.advanced ? ' advanced' : '') + (aiFilled.includes(f.key) ? ' filled-by-ai' : '');
       const label = document.createElement('label');
       label.htmlFor = 'f_' + f.key;
       label.textContent = f.label;
       if (f.hint) label.append(helpIcon(f.hint));
       wrap.append(label);
 
-      if (f.type === 'select' && f.options.length <= 4) {
+      if (f.type === 'channels') {
+        wrap.append(channelEditor(v));
+      } else if (f.type === 'date') {
+        const iw = document.createElement('div'); iw.className = 'input-wrap';
+        const input = document.createElement('input');
+        input.type = 'date'; input.id = 'f_' + f.key; input.dataset.key = f.key; input.value = v[f.key] || '';
+        input.onchange = input.oninput = () => { v[f.key] = input.value; saveValues(); compute(); };
+        input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(input); } };
+        iw.append(input); wrap.append(iw);
+        if (f.key === 'asOfDate') {
+          const t = document.createElement('button'); t.type = 'button'; t.className = 'link today-btn'; t.textContent = '오늘';
+          t.onclick = (e) => { e.preventDefault(); v[f.key] = Calc.todayStr(); input.value = v[f.key]; saveValues(); compute(); };
+          label.append(t);
+        }
+      } else if (f.type === 'select' && f.options.length <= 4) {
         const seg = document.createElement('div'); seg.className = 'segmented';
         f.options.forEach((o) => {
           const b = document.createElement('button'); b.type = 'button';
@@ -143,8 +169,8 @@
         else {
           input.inputMode = 'decimal';
           input.value = withCommas(v[f.key] || '');
-          const unit = f.unit || (f.type === 'money' ? '원' : f.type === 'percent' ? '%' : '');
-          if (unit) { input.classList.add('has-unit'); const u = document.createElement('span'); u.className = 'unit'; u.textContent = unit; iw.append(u); }
+          const unit = f.unit || (f.type === 'money' ? '원' : f.type === 'bigmoney' ? '백만원' : f.type === 'percent' ? '%' : '');
+          if (unit) { input.classList.add('has-unit'); if (unit.length > 1) input.classList.add('wide-unit'); const u = document.createElement('span'); u.className = 'unit'; u.textContent = unit; iw.append(u); }
           input.oninput = () => {
             let raw = parseNum(input.value);
             const parts = raw.split('.'); if (parts.length > 2) raw = parts[0] + '.' + parts.slice(1).join('');
@@ -157,7 +183,8 @@
           input.onkeydown = (e) => {
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
               e.preventDefault();
-              const step = (f.type === 'money' ? (e.shiftKey ? 1000 : 100) : (e.shiftKey ? 1 : 0.5)) * (e.key === 'ArrowUp' ? 1 : -1);
+              if (input.readOnly) return;
+              const step = (f.type === 'money' ? (e.shiftKey ? 1000 : 100) : f.type === 'bigmoney' ? (e.shiftKey ? 10 : 1) : (e.shiftKey ? 1 : 0.5)) * (e.key === 'ArrowUp' ? 1 : -1);
               const nv = Math.round((Calc.num(v[f.key]) + step) * 100) / 100;
               v[f.key] = String(Math.max(f.type === 'number' ? -Infinity : 0, nv));
               input.value = withCommas(v[f.key]); saveValues(); compute();
@@ -170,10 +197,94 @@
         })(input.onkeydown);
         iw.prepend(input);
         wrap.append(iw);
+        if (f.type === 'bigmoney') { const k = document.createElement('div'); k.className = 'kor'; k.id = 'k_' + f.key; wrap.append(k); }
       }
       form.append(wrap);
     });
     renderPresets();
+  }
+
+  // 숫자 입력칸 공통: 쉼표 표시, 커서 위치 유지
+  function numericInput(input, get, set) {
+    input.inputMode = 'decimal';
+    input.value = withCommas(get() || '');
+    input.oninput = () => {
+      let raw = parseNum(input.value);
+      const parts = raw.split('.'); if (parts.length > 2) raw = parts[0] + '.' + parts.slice(1).join('');
+      set(raw);
+      const fromEnd = input.value.length - input.selectionStart;
+      input.value = withCommas(raw);
+      const pos = Math.max(0, input.value.length - fromEnd); input.setSelectionRange(pos, pos);
+    };
+  }
+
+  // ───────── 채널별 목표·실적 입력 (목표 달성) ─────────
+  const CHANNEL_SUGGEST = ['스마트스토어', '쿠팡', '자사몰', '11번가', 'G마켓', '옥션', 'SSG닷컴', '롯데온', '카카오톡 선물하기', '오늘의집', '무신사', '29CM', '올리브영', '컬리', '홈쇼핑', '오프라인'];
+  function channelEditor(v) {
+    if (!Array.isArray(v.channels)) v.channels = [];
+    const list = v.channels;
+    const box = document.createElement('div'); box.className = 'channels';
+    const dl = document.createElement('datalist'); dl.id = 'chSuggest';
+    [...new Set([...state.presets.map((p) => p.name), ...CHANNEL_SUGGEST])].forEach((nm) => { const o = document.createElement('option'); o.value = nm; dl.append(o); });
+    box.append(dl);
+    if (list.length) {
+      const head = document.createElement('div'); head.className = 'ch-row ch-head';
+      head.innerHTML = '<span>채널</span><span>목표 (백만원)</span><span>실적 (백만원)</span><span></span>';
+      box.append(head);
+    }
+    list.forEach((c, i) => {
+      const row = document.createElement('div'); row.className = 'ch-row';
+      const name = document.createElement('input'); name.className = 'ch-name'; name.placeholder = '예) 쿠팡'; name.value = c.name || '';
+      name.setAttribute('list', 'chSuggest'); name.setAttribute('aria-label', `채널 ${i + 1} 이름`);
+      name.oninput = () => { c.name = name.value; saveValues(); compute(); };
+      row.append(name);
+      ['goal', 'actual'].forEach((k) => {
+        const inp = document.createElement('input'); inp.className = 'ch-num'; inp.placeholder = k === 'goal' ? '예) 100' : '예) 35';
+        inp.setAttribute('aria-label', `채널 ${i + 1} ${k === 'goal' ? '목표' : '실적'} (백만원)`); inp.dataset.ch = `${i}.${k}`;
+        numericInput(inp, () => c[k], (raw) => { c[k] = raw; saveValues(); compute(); });
+        row.append(inp);
+      });
+      const del = document.createElement('button'); del.type = 'button'; del.className = 'ghost small ch-del'; del.textContent = '✕'; del.title = '이 채널 삭제';
+      del.onclick = () => { list.splice(i, 1); saveValues(); renderForm(); compute(); };
+      row.append(del);
+      box.append(row);
+    });
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'chip add'; add.id = 'btnAddChannel';
+    add.textContent = list.length ? '+ 채널 추가' : '+ 채널별로 나눠 입력하기';
+    add.onclick = () => {
+      list.push({ name: '', goal: '', actual: '' });
+      saveValues(); renderForm(); compute();
+      const names = document.querySelectorAll('.ch-name'); if (names.length) names[names.length - 1].focus();
+    };
+    box.append(add);
+    return box;
+  }
+
+  // 계산으로 정해지는 입력칸(채널 합계·기간으로 정한 일수)은 잠그고 값을 보여 준다
+  function syncDerived() {
+    if (state.calc !== 'target') return;
+    const raw = valuesOf('target');
+    const v = Calc.normalize('target', raw);
+    const hasCh = Calc.channelRows(raw).length > 0;
+    const res = Object.fromEntries(Calc.run('target', raw).map((o) => [o.key, o.value]));
+    const s = Calc.dayNum(raw.startDate), e = Calc.dayNum(raw.endDate);
+    const byDates = s !== null && e !== null && e >= s;
+    const lock = (key, on, shown, why) => {
+      const el = document.getElementById('f_' + key); if (!el) return;
+      if (on) { el.readOnly = true; el.classList.add('derived'); el.value = withCommas(shown === null || shown === undefined ? '' : String(shown)); el.title = why; }
+      else if (el.readOnly) { el.readOnly = false; el.classList.remove('derived'); el.value = withCommas(raw[key] || ''); el.title = ''; }
+    };
+    lock('goal', hasCh, v.goal, '채널별 목표의 합계예요. 아래 채널 표에서 고쳐 주세요');
+    lock('actual', hasCh, v.actual, '채널별 실적의 합계예요. 아래 채널 표에서 고쳐 주세요');
+    lock('daysPassed', byDates, res.elapsedDays, '기간과 실적 기준일로 자동 계산했어요');
+    lock('daysTotal', byDates, res.periodDays, '기간으로 자동 계산했어요');
+    ['goal', 'actual'].forEach((k) => {
+      const el = document.getElementById('k_' + k); if (!el) return;
+      const val = v[k];
+      el.textContent = val === '' || val === undefined ? '' : `= ${Calc.korWon(Calc.num(val) * Calc.MILLION)}${hasCh ? ' · 채널 합계' : ''}`;
+    });
+    const rng = document.getElementById('f_endDate');
+    if (rng) rng.classList.toggle('invalid', s !== null && e !== null && e < s);
   }
 
   function focusNext(el) {
@@ -259,7 +370,7 @@
     res.forEach((o) => {
       if (o.primary) {
         const d = document.createElement('div'); d.className = 'big ' + toneClass(o);
-        d.innerHTML = `<div class="lbl">${o.label}</div><div class="val">${o.text}</div>`;
+        d.innerHTML = `<div class="lbl">${o.label}</div><div class="val">${o.text}</div>` + (o.sub ? `<div class="sub">${o.sub}</div>` : '');
         prim.append(d);
         return;
       }
@@ -272,10 +383,13 @@
       const dd = document.createElement('dd');
       const val = document.createElement('span'); val.className = 'v'; val.textContent = o.text;
       if (typeof o.value === 'number' && o.value < 0) val.classList.add('neg');
+
       const star = document.createElement('button');
       star.type = 'button'; star.className = 'star'; star.textContent = pinned ? '★' : '☆';
       star.setAttribute('aria-label', pinned ? `${o.label} 강조 해제` : `${o.label} 강조`);
-      dd.append(val, star);
+      dd.append(val);
+      if (o.sub) { const sb = document.createElement('span'); sb.className = 'v-sub'; sb.textContent = o.sub; dd.append(sb); }
+      dd.append(star);
       row.append(dt, dd);
       row.onclick = () => togglePin(o.key);
       list.append(row);
@@ -290,6 +404,22 @@
     });
     pinBox.hidden = !pinBox.children.length;
     renderBreakdown(res, v);
+    syncDerived();
+    renderChannelResults(v);
+  }
+
+  function renderChannelResults(v) {
+    const box = $('#channelResults');
+    const rows = state.calc === 'target' ? Calc.channelRows(v) : [];
+    if (!rows.length) { box.hidden = true; box.innerHTML = ''; return; }
+    const w = (x) => (x === null || x === undefined || !isFinite(x) ? '—' : Calc.korWon(x));
+    const tone = (r) => (r === null ? '' : r >= 1 ? 'good' : r >= 0.7 ? 'warn' : 'bad');
+    box.hidden = false;
+    box.innerHTML = '<div class="ch-title">채널별 달성 현황</div><table><thead><tr><th>채널</th><th>목표</th><th>실적</th><th>달성률</th><th>마감 예상</th><th>일평균 필요</th></tr></thead><tbody>' +
+      rows.map((r) => `<tr><td>${escapeHtml(r.name)}<small>${r.share === null ? '' : '목표의 ' + Calc.fmt(r.share, 'percent')}</small></td><td>${w(r.goal)}</td><td>${w(r.actual)}</td>` +
+        `<td class="${tone(r.rate)}"><b>${Calc.fmt(r.rate, 'percent')}</b><i class="meter"><i style="width:${Math.max(0, Math.min(100, (r.rate || 0) * 100))}%"></i></i></td>` +
+        `<td class="${tone(r.forecastRate)}">${Calc.fmt(r.forecastRate, 'percent')}</td><td>${w(r.dailyNeed)}</td></tr>`).join('') +
+      '</tbody></table>';
   }
 
   function renderBreakdown(res, v) {
@@ -316,7 +446,10 @@
 
   // ───────── actions ─────────
   function currentRecord() {
-    return { calc: state.calc, values: { ...valuesOf(state.calc) }, memo: $('#memo').value.trim(), date: Date.now() };
+    const values = JSON.parse(JSON.stringify(valuesOf(state.calc)));
+    // 실적 기준일을 비워 두면 오늘 날짜로 남긴다 (나중에 장부를 열어도 경과 일수가 바뀌지 않게)
+    if (state.calc === 'target' && !values.asOfDate && values.startDate && values.endDate) values.asOfDate = Calc.todayStr();
+    return { calc: state.calc, values, memo: $('#memo').value.trim(), date: Date.now() };
   }
 
   async function record() {
@@ -339,8 +472,43 @@
   }
 
   function reset() {
-    state.values[state.calc] = Calc.defaults(state.calc); saveValues(); renderForm(); compute();
+    const keep = state.values[state.calc] || {};
+    Object.keys(keep).forEach((k) => delete keep[k]);
+    Object.assign(keep, Calc.defaults(state.calc)); state.values[state.calc] = keep;
+    saveValues(); renderForm(); compute();
     const first = document.querySelector('#form input'); if (first) first.focus();
+  }
+
+  // ───────── AI 개인정보 보호: 상품명 별칭 / 금액 숨기기 ─────────
+  // 대화마다 실제 이름 ↔ 별칭(상품A, 상품B…) 표를 두고, 보낼 때 바꾸고 받은 답은 화면에서만 되돌린다
+  state.aliases = [];
+  const aliasFor = (real) => {
+    let a = state.aliases.find((x) => x[0] === real);
+    if (!a) { a = [real, '상품' + String.fromCharCode(65 + (state.aliases.length % 26))]; state.aliases.push(a); }
+    return a[1];
+  };
+  const textValues = () => {
+    const v = valuesOf(state.calc);
+    return CALCS[state.calc].fields.filter((f) => f.type === 'text').map((f) => String(v[f.key] || '').trim()).filter((x) => x.length >= 2);
+  };
+  function privacyOpts() {
+    if (state.privacy === 'off') return {};
+    const nm = textValues()[0];
+    return { alias: nm ? aliasFor(nm) : null, hideMoney: state.privacy === 'strict' };
+  }
+  function maskText(t) {
+    if (state.privacy === 'off') return t;
+    textValues().forEach(aliasFor);
+    return [...state.aliases].sort((a, b) => b[0].length - a[0].length).reduce((s, [real, al]) => s.split(real).join(al), t);
+  }
+  function unmaskText(t) {
+    return state.aliases.reduce((s, [real, al]) => s.split(al).join(real), t);
+  }
+  function aiSummary() { return Calc.summaryText(state.calc, valuesOf(state.calc), privacyOpts()); }
+  const PRIVACY_LABEL = { name: '🔒 상품명 가림', strict: '🔒 상품명·금액 가림', off: '' };
+  function renderPrivacyBadge() {
+    const b = $('#privacyBadge');
+    b.textContent = PRIVACY_LABEL[state.privacy] || ''; b.hidden = !b.textContent;
   }
 
   // ───────── AI: 자연어 입력 ─────────
@@ -351,11 +519,12 @@
     if (!(await ensureAI())) return;
     const bar = $('#aiBar'); bar.classList.add('loading'); $('#aiGo').disabled = true;
     const note = $('#aiNote'); note.hidden = false; note.className = 'ai-note'; note.textContent = 'AI가 입력을 해석하는 중…';
-    const r = await api.parse(text, state.calc);
+    const r = await api.parse(maskText(text), state.calc);
     bar.classList.remove('loading'); $('#aiGo').disabled = false;
     if (!r.ok) { note.className = 'ai-note err'; note.textContent = r.error; if (r.reason) showNoAI(); return; }
     if (r.calculator !== state.calc) { state.calc = r.calculator; store.set('calc', r.calculator); renderSidebar(); }
     const v = valuesOf(r.calculator);
+    for (const k of Object.keys(r.inputs)) { if (typeof r.inputs[k] === 'string') r.inputs[k] = unmaskText(r.inputs[k]); }
     Object.assign(v, r.inputs); saveValues();
     renderForm(Object.keys(r.inputs)); compute();
     note.textContent = `✓ ${CALCS[r.calculator].name} 계산기에 ${Object.keys(r.inputs).length}개 값을 채웠어요. ${r.note || ''}`;
@@ -371,15 +540,17 @@
     if (!(await ensureAI())) return;
     state.thread = [];
     $('#aiThread').innerHTML = '';
-    const summary = Calc.summaryText(state.calc, valuesOf(state.calc));
-    send(`다음 계산 결과를 분석하고 개선 방안을 알려주세요.\n\n${summary}`, true);
+    send(`다음 계산 결과를 분석하고 개선 방안을 알려주세요.\n\n${aiSummary()}`, true);
   }
 
   function send(text, isContext) {
     if (activeId) return;
     openPanel();
-    state.thread.push({ role: 'user', content: text });
-    const u = document.createElement('div'); u.className = 'msg user' + (isContext ? ' context' : ''); u.textContent = text;
+    // AI 회사로는 가린 내용을 보내고, 화면에는 사용자가 쓴 그대로(첫 요약은 실제로 보낸 내용) 보여 준다
+    const out = maskText(text);
+    state.thread.push({ role: 'user', content: out });
+    const u = document.createElement('div'); u.className = 'msg user' + (isContext ? ' context' : ''); u.textContent = isContext ? out : text;
+    if (isContext) u.title = '실제로 AI에 보낸 내용이에요';
     $('#aiThread').append(u);
     const a = document.createElement('div'); a.className = 'msg assistant typing'; a.dataset.raw = '';
     $('#aiThread').append(a);
@@ -389,7 +560,7 @@
     // 대화 중 계산값이 바뀌었으면 최신 수치를 함께 보낸다
     const msgs = state.thread.map((m) => ({ role: m.role, content: m.content }));
     if (!isContext && state.thread.length > 1) {
-      msgs[msgs.length - 1].content = `${text}\n\n(참고: 현재 계산기 화면 값)\n${Calc.summaryText(state.calc, valuesOf(state.calc))}`;
+      msgs[msgs.length - 1].content = `${out}\n\n(참고: 현재 계산기 화면 값)\n${aiSummary()}`;
     }
     api.chat(activeId, msgs);
     scrollThread();
@@ -400,7 +571,7 @@
 
   api.onDelta(({ id, delta }) => {
     const el = document.querySelector(`.msg.assistant[data-id="${id}"]`); if (!el) return;
-    el.dataset.raw += delta; el.innerHTML = md(el.dataset.raw); scrollThread();
+    el.dataset.raw += delta; el.innerHTML = md(unmaskText(el.dataset.raw)); scrollThread();
   });
   api.onDone(({ id, error, reason }) => {
     if (reason) showNoAI();
@@ -422,7 +593,7 @@
   $('#aiAsk').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#aiCompose').requestSubmit(); } };
   $('#aiStop').onclick = () => { if (activeId) api.abort(activeId); };
   $('#aiClose').onclick = closePanel;
-  $('#aiClear').onclick = () => { if (activeId) api.abort(activeId); state.thread = []; $('#aiThread').innerHTML = '<div class="empty">계산 후 ✨ AI 분석을 누르거나, 아래에 질문을 입력하세요.</div>'; };
+  $('#aiClear').onclick = () => { if (activeId) api.abort(activeId); state.thread = []; state.aliases = []; $('#aiThread').innerHTML = '<div class="empty">계산 후 ✨ AI 분석을 누르거나, 아래에 질문을 입력하세요.</div>'; };
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function md(src) {
@@ -456,7 +627,7 @@
       b.innerHTML = `<span class="when">${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</span>` +
         `<span class="what">${escapeHtml(rec.values.name || rec.memo || calc.name)}</span><span class="tag">${calc.icon} ${calc.name}</span><span class="muted">${main}</span>`;
       b.onclick = () => {
-        state.values[rec.calc] = { ...rec.values }; saveValues();
+        state.values[rec.calc] = JSON.parse(JSON.stringify(rec.values)); saveValues();
         state.calc = rec.calc; store.set('calc', rec.calc);
         $('#historyModal').hidden = true; renderSidebar(); renderForm(); compute();
       };
@@ -560,6 +731,7 @@
       $('#aiBase').value = s.ai.baseURL || '';
     }
     const a = s.active;
+    $('#geminiWarn').hidden = !(p === 'gemini' || (isAuto && a.available && a.provider === 'gemini'));
     $('#aiActive').textContent = a.available ? `현재 연결: ${a.label} · ${a.model}${a.auto ? ' (자동)' : ''}` : '현재 연결된 AI 없음';
     $('#aiAutoInfo').innerHTML = isAuto
       ? '자동 모드: 저장된 키가 있으면 <b>Claude → OpenAI → Gemini</b> 순으로 사용하고, 키가 없으면 이 컴퓨터의 <b>무료 로컬 AI(Ollama)</b>에 자동 연결합니다.' +
@@ -574,6 +746,7 @@
     renderProviderFields();
     $('#ledgerPath').textContent = s.ledgerPath + (s.ledgerExists ? '' : '  (첫 기록 시 생성)');
     $('#appVersion').textContent = s.version;
+    $('#privacyMode').value = state.privacy;
     $('#autoUpdate').checked = s.updateAuto;
     $('#settingsModal').hidden = false;
     if (!$('#rowKey').hidden) $('#apiKey').focus();
@@ -600,6 +773,11 @@
     const provider = $('#aiProvider').value;
     await api.saveAI({ provider, deleteKey: true }); await refreshAIStatus(); renderProviderFields(); toast('API 키를 삭제했어요');
   };
+  $('#privacyMode').onchange = (e) => {
+    state.privacy = e.target.value; store.set('privacy', state.privacy); renderPrivacyBadge();
+    toast({ off: 'AI에 화면 값을 그대로 보내요', name: 'AI에 상품명을 별칭으로 바꿔 보내요', strict: 'AI에 상품명과 금액을 빼고 보내요' }[state.privacy]);
+  };
+  $('#privacyBadge').onclick = () => openSettings();
   $('#btnChooseLedger').onclick = async () => { const p = await api.chooseLedger(); if (p) openSettings(); };
   $('#btnRevealLedger').onclick = () => api.revealLedger();
 
@@ -686,7 +864,7 @@
     if (e.key === 'Escape') document.querySelectorAll('.modal:not([hidden])').forEach(closeModal);
   });
 
-  renderSidebar(); renderForm(); compute(); updateHistoryCount();
+  renderSidebar(); renderForm(); compute(); updateHistoryCount(); renderPrivacyBadge();
   $('#aiClear').click();
   document.querySelectorAll('.hint-kbd').forEach((k) => { k.textContent = MOD + 'K'; });
   if (api.platform === 'win32') $('#btnRevealLedger').textContent = '탐색기에서 보기';

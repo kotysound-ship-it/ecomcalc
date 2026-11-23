@@ -64,13 +64,45 @@ near(R('discountRate', { price: '20000', sale: '15000' }).rate, 0.25, 'discount 
 near(R('marginRate', { price: '10000', cost: '6000' }).markup, 4000 / 6000, 'markup');
 near(R('sellPrice', { cost: '7000', margin: '30', unit: '100' }).price, 10000, 'sell price');
 near(R('marginAmount', { price: '100', cost: '60', qty: '5' }).total, 200, 'margin amount');
-near(R('target', { goal: '1000', actual: '400', daysPassed: '10', daysTotal: '30' }).dailyNeed, 30, 'daily need');
+// 목표 달성: 금액은 100만원 단위 입력 → 원 단위 결과
+near(R('target', { goal: '1000', actual: '400', daysPassed: '10', daysTotal: '30' }).dailyNeed, 30e6, 'daily need');
+{
+  // 기간 11/1~11/30, 기준일 11/12 → 경과 12일 / 전체 30일
+  const r = R('target', { startDate: '2026-11-01', endDate: '2026-11-30', asOfDate: '2026-11-12', goal: '300', actual: '120', daysPassed: '99', daysTotal: '99' });
+  near(r.elapsedDays, 12, 'elapsed from dates'); near(r.periodDays, 30, 'period from dates');
+  near(r.forecast, 300e6, 'forecast'); near(r.dailyNeed, 180e6 / 18, 'daily need dates');
+  // 기준일이 기간 밖이면 0~전체 일수로 맞춤, 종료일이 시작일보다 앞이면 직접 입력값 사용
+  near(R('target', { startDate: '2026-11-01', endDate: '2026-11-30', asOfDate: '2026-12-25', goal: '1' }).elapsedDays, 30, 'elapsed clamp');
+  near(R('target', { startDate: '2026-11-30', endDate: '2026-11-01', daysPassed: '5', daysTotal: '10', goal: '1' }).periodDays, 10, 'bad dates fallback');
+  // 채널별 입력 → 목표·실적은 채널 합계
+  const ch = { goal: '999', actual: '999', startDate: '2026-11-01', endDate: '2026-11-30', asOfDate: '2026-11-15',
+    channels: [{ name: '스마트스토어', goal: '200', actual: '100' }, { name: '쿠팡', goal: '100', actual: '20' }, { name: '빈 행', goal: '', actual: '' }] };
+  const t = R('target', ch);
+  near(t.rate, 0.4, 'channel total rate'); near(t.remain, 180e6, 'channel remain');
+  const rows = Calc.channelRows(ch);
+  assert.strictEqual(rows.length, 2, 'empty channel rows skipped');
+  near(rows[0].rate, 0.5, 'ch1 rate'); near(rows[1].forecast, 40e6, 'ch2 forecast'); near(rows[0].share, 2 / 3, 'ch1 share');
+  // 한글 단위
+  assert.strictEqual(Calc.korWon(1e7), '1천만원'); assert.strictEqual(Calc.korWon(1e8), '1억원');
+  assert.strictEqual(Calc.korWon(2e9), '20억원'); assert.strictEqual(Calc.korWon(123456789), '1억 2,346만원');
+  assert.strictEqual(Calc.korWon(-35e6), '-3,500만원'); assert.strictEqual(Calc.korWon(5000), '5,000원');
+  // AI 요약: 상품명 별칭, 금액 숨기기
+  const sm = Calc.summaryText('profit', { name: '비밀 셔츠', price: '29900', cost: '9000', feeRate: '5.5' }, { alias: '상품A', hideMoney: true });
+  assert.ok(!sm.includes('비밀 셔츠') && sm.includes('상품A'), 'alias');
+  assert.ok(!/29,900|9,000/.test(sm) && sm.includes('5.5%'), 'money hidden: ' + sm);
+  const st = Calc.summaryText('target', ch, { hideMoney: true });
+  assert.ok(!/억|만원|,000원/.test(st) && st.includes('스마트스토어'), 'target money hidden: ' + st);
+  assert.ok(Calc.summaryText('target', ch).includes('3억원'), 'target summary shows kor units');
+}
 near(R('supplyPrice', { consumer: '11000', distMargin: '30' }).supplyEx, 7000, 'supply ex');
 
 // ── 2. 엑셀 수식 vs JS (무작위 입력 다수)
 function rand(f) {
   if (f.type === 'select') return f.options[Math.floor(Math.random() * f.options.length)];
   if (f.type === 'text') return '상품';
+  if (f.type === 'channels') return [];
+  if (f.type === 'date') return Math.random() < 0.3 ? '' : `2026-${String(1 + Math.floor(Math.random() * 12)).padStart(2, '0')}-${String(1 + Math.floor(Math.random() * 28)).padStart(2, '0')}`;
+  if (f.type === 'bigmoney') return String(Math.round(Math.random() * 5000) / 10);
   if (Math.random() < 0.15) return '';
   if (f.type === 'percent') return String(Math.round(Math.random() * 400) / 10);
   if (f.type === 'money') return String(Math.round(Math.random() * 50000));
@@ -82,6 +114,7 @@ for (const id of Object.keys(Calc.CALCS)) {
   for (let trial = 0; trial < 60; trial++) {
     const values = {};
     Calc.CALCS[id].fields.forEach((f) => { values[f.key] = rand(f); });
+    if (values.asOfDate === '') values.asOfDate = '2026-06-15'; // 엑셀 TODAY()와 비교하지 않도록
     const v = Object.assign(Calc.defaults(id), values);
     const addr = Object.fromEntries(cols.map((c) => [c.key, `${c.letter}2`]));
     const row = cols.map((c) => {
@@ -90,6 +123,8 @@ for (const id of Object.keys(Calc.CALCS)) {
         const raw = v[c.key]; const f = c.field;
         if (raw === '') return null;
         if (f.type === 'percent') return Number(raw) / 100;
+        if (f.type === 'bigmoney') return Number(raw) * Calc.MILLION;
+        if (f.type === 'date') return Calc.dayNum(raw) + 25569;
         if (f.type === 'money' || f.type === 'number') return Number(raw);
         if (f.type === 'select' && f.options.every((o) => !isNaN(Number(o)))) return Number(raw);
         return raw;
@@ -118,11 +153,21 @@ console.log(`✓ 엑셀 수식 == 앱 계산: ${checked}개 값 일치`);
   const res = await Excel.appendRecords(file, [
     { calc: 'profit', values: { name: 'B', price: '19900', cost: '12000', feeRate: '10.8', shipping: '3000', otherCost: '2000' } },
     { calc: 'vat', values: { amount: '55000' } },
+    { calc: 'target', values: { startDate: '2026-11-01', endDate: '2026-11-30', asOfDate: '2026-11-15', channels: [{ name: '쿠팡', goal: '100', actual: '40' }, { name: '자사몰', goal: '50', actual: '10' }] } },
   ]);
-  assert.deepStrictEqual(res.map((r) => r.row), [3, 2]);
+  assert.deepStrictEqual(res.map((r) => r.row), [3, 2, 2]);
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook(); await wb.xlsx.readFile(file);
   assert.strictEqual(wb.worksheets[0].name, '요약');
+  {
+    const tw = wb.getWorksheet('목표 달성'); const tc = Excel.layout('target');
+    const at = (k) => tw.getCell(`${tc.find((c) => c.key === k).letter}2`).value;
+    assert.strictEqual(at('goal'), 150e6, '목표는 원 단위 채널 합계로 기록');
+    assert.ok(at('startDate') instanceof Date, '날짜 칸');
+    const cw = wb.getWorksheet(Excel.CH_SHEET);
+    assert.ok(cw && cw.getCell('G3').value === '자사몰' && cw.getCell('H3').value === 50e6, '채널별 시트');
+    assert.ok(cw.getCell('J2').value.formula, '채널 달성률 수식');
+  }
   const ws = wb.getWorksheet('영업이익률');
   const cols = Excel.layout('profit');
   const pc = cols.find((c) => c.key === 'profit').letter;

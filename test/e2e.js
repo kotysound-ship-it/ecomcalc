@@ -54,7 +54,7 @@ module.exports = ({ app, win, clipboard }) => {
       sellPrice: { cost: '7000', margin: '30', feeRate: '5' },
       marginAmount: { price: '15000', cost: '9000', qty: '12' },
       growth: { prev: '1200000', curr: '1500000' },
-      target: { goal: '30000000', actual: '12000000', daysPassed: '12', daysTotal: '30' },
+      target: { goal: '30', actual: '12', daysPassed: '12', daysTotal: '30' },
       vat: { amount: '55000' },
       discountPrice: { price: '29900', rate: '15' },
       discountRate: { price: '20000', sale: '15000' },
@@ -69,6 +69,28 @@ module.exports = ({ app, win, clipboard }) => {
         return shown.join(' / ');
       });
     }
+    await step('목표 달성: 백만원 단위 + 한글 병기 + 기간 + 채널별 입력', async () => {
+      const r = await js(`${H} nav('목표 달성'); $('#btnReset').click();
+        type('f_goal', '250'); const kor = document.getElementById('k_goal').textContent;
+        const sd = document.getElementById('f_startDate'); sd.value = '2026-11-01'; sd.dispatchEvent(new Event('change'));
+        const ed = document.getElementById('f_endDate'); ed.value = '2026-11-30'; ed.dispatchEvent(new Event('change'));
+        const ad = document.getElementById('f_asOfDate'); ad.value = '2026-11-12'; ad.dispatchEvent(new Event('change'));
+        const days = [document.getElementById('f_daysPassed').value, document.getElementById('f_daysTotal').value, document.getElementById('f_daysTotal').readOnly];
+        $('#btnAddChannel').click(); $('#btnAddChannel').click();
+        const set = (sel, v) => { const el = document.querySelector(sel); el.value = v; el.dispatchEvent(new Event('input')); };
+        set('.ch-row:nth-of-type(2) .ch-name', '쿠팡'); set('[data-ch="0.goal"]', '200'); set('[data-ch="0.actual"]', '100');
+        set('.ch-row:nth-of-type(3) .ch-name', '자사몰'); set('[data-ch="1.goal"]', '100'); set('[data-ch="1.actual"]', '20');
+        return { kor, days, goal: document.getElementById('f_goal').value, goalRO: document.getElementById('f_goal').readOnly, korSum: document.getElementById('k_goal').textContent,
+          bigs: bigs(), sub: [...document.querySelectorAll('.big .sub')].map((e) => e.textContent),
+          rows: [...document.querySelectorAll('#channelResults tbody tr')].map((tr) => [...tr.children].map((td) => td.firstChild.textContent)) };`);
+      ok(r.kor === '= 2억 5천만원', '한글 병기 ' + r.kor);
+      ok(r.days[0] === '12' && r.days[1] === '30' && r.days[2], '기간 → 일수 ' + r.days);
+      ok(r.goal === '300' && r.goalRO && r.korSum.includes('3억'), '채널 합계 ' + r.goal + ' ' + r.korSum);
+      ok(r.bigs[0] === '40.0%' && r.bigs[1] === '1억 8천만원' && r.sub[0] === '180,000,000원', '결과 ' + r.bigs + ' / ' + r.sub);
+      ok(r.rows.length === 2 && r.rows[0][0] === '쿠팡' && r.rows[0][3] === '50.0%' && r.rows[1][3] === '20.0%', '채널 표 ' + JSON.stringify(r.rows));
+      await sleep(500); await shot('01b-target-channels');
+      return `목표 ${r.kor} · 기간 ${r.days[0]}/${r.days[1]}일 · 채널 합계 ${r.korSum} · 남은 금액 ${r.bigs[1]} (${r.sub[0]})`;
+    });
     await step('계산기: 과/면세·끝자리 선택 버튼', async () => {
       const r = await js(`${H} nav('부가세'); seg('mode', '공급가액(VAT별도)'); type('f_amount', '10000'); const a = bigs();
         nav('할인가'); type('f_price','29900'); type('f_rate','15'); seg('unit','안 함'); const b = bigs(); seg('unit','100원'); const c = bigs(); return [a,b,c];`);
@@ -289,6 +311,29 @@ module.exports = ({ app, win, clipboard }) => {
       return '스트리밍 도중 중지됨';
     });
     function ADVICE_LEN() { return Mock.ADVICE.join('').length; }
+
+    await step('AI 개인정보 보호: 상품명 별칭 / 금액 숨기기', async () => {
+      const lastSent = () => { const r = mock.state.requests.filter((x) => x.path.startsWith('/ollama') && x.method === 'POST' && x.body && x.body.stream); return JSON.stringify(r[r.length - 1].body.messages); };
+      const analyzeOnce = async () => {
+        await js(`${H} $('#aiClear').click(); $('#btnAnalyze').click();`);
+        await until(`(() => { const m = document.querySelectorAll('.msg.assistant'); const l = m[m.length-1]; return l && !l.classList.contains('typing'); })()`);
+      };
+      await js(`${H} nav('영업이익률'); $('#btnReset').click(); type('f_name', '비밀 린넨 셔츠'); type('f_price', '29900'); type('f_cost', '9000'); type('f_feeRate', '5.5');`);
+      await analyzeOnce();
+      const a = lastSent();
+      ok(!a.includes('비밀 린넨 셔츠') && a.includes('상품A') && a.includes('29,900'), '기본(상품명 가림) ' + a.slice(0, 200));
+      const badge = await js(`return document.getElementById('privacyBadge').textContent`);
+      await js(`${H} $('#aiAsk').value = '비밀 린넨 셔츠 가격을 올리면?'; $('#aiCompose').requestSubmit();`);
+      await until(`document.querySelectorAll('.msg.assistant').length === 2 && !document.querySelectorAll('.msg.assistant')[1].classList.contains('typing')`);
+      const q = lastSent();
+      ok(!q.includes('비밀 린넨 셔츠') && q.includes('상품A 가격을 올리면'), '질문 속 상품명 ' + q.slice(-300));
+      await js(`${H} $('#btnSettings').click(); await new Promise(r=>setTimeout(r,250)); const s = $('#privacyMode'); s.value = 'strict'; s.dispatchEvent(new Event('change')); document.getElementById('settingsModal').hidden = true;`);
+      await analyzeOnce();
+      const b = lastSent();
+      ok(!b.includes('29,900') && !b.includes('9,000') && b.includes('5.5%') && b.includes('비공개'), '금액 숨김 ' + b.slice(0, 300));
+      await js(`${H} $('#btnSettings').click(); await new Promise(r=>setTimeout(r,250)); const s = $('#privacyMode'); s.value = 'name'; s.dispatchEvent(new Event('change')); document.getElementById('settingsModal').hidden = true;`);
+      return `배지 "${badge}" · 상품명 → 상품A (분석·질문 모두) · 금액 숨김 모드에서 금액 미전송`;
+    });
 
     // ───────── 9. 클라우드 공급자 3종 + 직접 입력 서버 ─────────
     process.env.ECOM_OLLAMA_URL = 'http://127.0.0.1:9';

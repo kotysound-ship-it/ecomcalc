@@ -20,6 +20,67 @@
   // 엑셀: 분모 0이면 빈칸
   const xdiv = (a, b) => `IF(${b}=0,"",${a}/${b})`;
 
+  // 큰 금액(bigmoney) 칸은 백만원 단위로 입력받고, 계산·엑셀에는 원 단위로 쓴다
+  const MILLION = 1e6;
+  // 원 → "1억 2,000만원", "1천만원", "20억원" 같은 한글 단위 (만원 단위 반올림)
+  function korWon(won) {
+    if (won === null || won === undefined || !isFinite(won)) return '—';
+    const sign = won < 0 ? '-' : '';
+    const a = Math.abs(won);
+    if (a < 1e4) return sign + Math.round(a).toLocaleString('ko-KR') + '원';
+    let man = Math.round(a / 1e4);
+    const jo = Math.floor(man / 1e8); man -= jo * 1e8;
+    const eok = Math.floor(man / 1e4); man -= eok * 1e4;
+    const parts = [];
+    if (jo) parts.push(jo.toLocaleString('ko-KR') + '조');
+    if (eok) parts.push(eok.toLocaleString('ko-KR') + '억');
+    if (man) parts.push((man % 1000 === 0 ? man / 1000 + '천' : man.toLocaleString('ko-KR')) + '만');
+    return sign + parts.join(' ') + '원';
+  }
+
+  // 'YYYY-MM-DD' → 1970-01-01 기준 일수(UTC). 엑셀 날짜 일련번호 = 일수 + 25569
+  function dayNum(s) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+    if (!m) return null;
+    const t = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    if (new Date(t).getUTCMonth() !== +m[2] - 1) return null; // 2월 30일 같은 날짜
+    return t / 86400000;
+  }
+  function todayStr(now) {
+    const d = now || new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  // 채널별 입력: [{name, goal, actual}] (goal·actual은 백만원 단위 문자열). 값이 하나라도 있는 행만 사용
+  function channelsOf(v) {
+    const list = Array.isArray(v && v.channels) ? v.channels : [];
+    return list.filter((c) => c && (String(c.goal || '').trim() !== '' || String(c.actual || '').trim() !== ''));
+  }
+  const sumStr = (x) => String(Math.round(x * 1e6) / 1e6);
+
+  // 목표 달성: 기간(날짜) 또는 직접 입력한 일수로 경과·전체 일수를 정한다
+  function targetDays(v) {
+    const s = dayNum(v.startDate), e = dayNum(v.endDate);
+    if (s !== null && e !== null && e >= s) {
+      const total = e - s + 1;
+      const a = dayNum(v.asOfDate);
+      const asOf = a !== null ? a : dayNum(todayStr(v._now));
+      return { elapsed: Math.max(0, Math.min(total, asOf - s + 1)), total, fromDates: true };
+    }
+    return { elapsed: n(v.daysPassed) > 0 ? n(v.daysPassed) : null, total: n(v.daysTotal) > 0 ? n(v.daysTotal) : null, fromDates: false };
+  }
+  function targetMetrics(goal, act, d) {
+    const dp = d.elapsed || 0, dt = d.total || 0;
+    const forecast = dp > 0 && dt > 0 ? act / dp * dt : null;
+    return {
+      rate: div(act, goal),
+      remain: goal - act,
+      forecast,
+      forecastRate: forecast === null ? null : div(forecast, goal),
+      dailyNeed: dt > dp && dt > 0 ? Math.max(0, goal - act) / (dt - dp) : null,
+    };
+  }
+
   const TAX = ['과세', '면세'];
   const YN = ['Y', 'N'];
   const UNITS = ['1', '10', '100', '1000'];
@@ -155,30 +216,42 @@
 
     target: {
       name: '목표 달성', icon: '🎯', group: '매출 분석',
-      desc: '목표 대비 달성률과 남은 기간 일평균 필요 매출',
+      desc: '기간·채널별 목표 대비 달성률과 남은 기간 일평균 필요 매출',
       fields: [
-        { key: 'goal', label: '목표 매출', type: 'money' },
-        { key: 'actual', label: '현재 실적', type: 'money' },
-        { key: 'daysPassed', label: '경과 일수', type: 'number', hint: '선택: 마감 예상치 계산' },
-        { key: 'daysTotal', label: '전체 일수', type: 'number', placeholder: '30' },
+        { key: 'startDate', label: '기간 시작일', type: 'date', hint: '목표 기간의 첫날. 시작일과 종료일을 넣으면 경과 일수·전체 일수를 자동으로 계산해요' },
+        { key: 'endDate', label: '기간 종료일', type: 'date', hint: '목표 기간의 마지막 날(마감일)' },
+        { key: 'asOfDate', label: '실적 기준일', type: 'date', hint: '현재 실적을 집계한 날짜. 비우면 오늘로 계산하고, 장부에 기록할 때 오늘 날짜를 함께 남겨요' },
+        { key: 'goal', label: '목표 매출', type: 'bigmoney', placeholder: '예) 100 = 1억', hint: '100만원 단위로 입력해요. 100을 넣으면 1억 원. 채널별로 입력하면 채널 합계가 자동으로 들어가요' },
+        { key: 'actual', label: '현재 실적', type: 'bigmoney', placeholder: '예) 35 = 3,500만', hint: '100만원 단위로 입력해요. 채널별로 입력하면 채널 합계가 자동으로 들어가요' },
+        { key: 'daysPassed', label: '경과 일수', type: 'number', unit: '일', hint: '기간(시작일·종료일)을 넣지 않을 때만 직접 입력해요' },
+        { key: 'daysTotal', label: '전체 일수', type: 'number', unit: '일', placeholder: '30', hint: '기간(시작일·종료일)을 넣지 않을 때만 직접 입력해요' },
+        { key: 'channels', label: '채널별 목표·실적', type: 'channels', default: [], hint: '스마트스토어·쿠팡·자사몰처럼 채널별로 목표와 실적을 나눠 넣으면 채널별 달성률을 보여 주고, 위 목표·실적 칸에는 합계가 들어가요' },
       ],
+      // 채널별 입력이 있으면 목표·실적 칸을 채널 합계로 바꾼다 (화면·엑셀·AI가 같은 값을 쓰게)
+      normalize(v) {
+        const ch = channelsOf(v);
+        if (!ch.length) return v;
+        return Object.assign({}, v, {
+          goal: sumStr(ch.reduce((s, c) => s + n(c.goal), 0)),
+          actual: sumStr(ch.reduce((s, c) => s + n(c.actual), 0)),
+        });
+      },
       compute(v) {
-        const goal = n(v.goal), act = n(v.actual), dp = n(v.daysPassed), dt = n(v.daysTotal);
-        const forecast = dp > 0 && dt > 0 ? act / dp * dt : null;
-        return {
-          rate: div(act, goal),
-          remain: goal - act,
-          forecast,
-          forecastRate: forecast === null ? null : div(forecast, goal),
-          dailyNeed: dt > dp && dt > 0 ? Math.max(0, goal - act) / (dt - dp) : null,
-        };
+        const d = targetDays(v);
+        return Object.assign(targetMetrics(n(v.goal) * MILLION, n(v.actual) * MILLION, d), { elapsedDays: d.elapsed, periodDays: d.total });
       },
       outputs: [
         { key: 'rate', label: '달성률', type: 'percent', primary: true, tone: 'goal', excel: (c) => xdiv(c('actual'), c('goal')) },
-        { key: 'remain', label: '남은 금액', type: 'money', primary: true, excel: (c) => `${c('goal')}-${c('actual')}` },
-        { key: 'forecast', label: '마감 예상 실적', type: 'money', excel: (c) => `IF(AND(N(${c('daysPassed')})>0,N(${c('daysTotal')})>0),${c('actual')}/${c('daysPassed')}*${c('daysTotal')},"")` },
+        { key: 'remain', label: '남은 금액', type: 'money', big: true, primary: true, excel: (c) => `${c('goal')}-${c('actual')}` },
+        { key: 'forecast', label: '마감 예상 실적', type: 'money', big: true, hint: '지금까지의 일평균 실적이 기간 끝까지 이어질 때의 예상 실적',
+          excel: (c) => `IF(AND(N(${c('elapsedDays')})>0,N(${c('periodDays')})>0),${c('actual')}/${c('elapsedDays')}*${c('periodDays')},"")` },
         { key: 'forecastRate', label: '마감 예상 달성률', type: 'percent', excel: (c) => `IF(OR(${c('forecast')}="",N(${c('goal')})=0),"",${c('forecast')}/${c('goal')})` },
-        { key: 'dailyNeed', label: '남은 기간 일평균 필요', type: 'money', excel: (c) => `IF(N(${c('daysTotal')})>N(${c('daysPassed')}),MAX(0,${c('goal')}-${c('actual')})/(${c('daysTotal')}-N(${c('daysPassed')})),"")` },
+        { key: 'dailyNeed', label: '남은 기간 일평균 필요', type: 'money', big: true, hint: '남은 금액 ÷ 남은 일수',
+          excel: (c) => `IF(AND(N(${c('periodDays')})>0,N(${c('periodDays')})>N(${c('elapsedDays')})),MAX(0,${c('goal')}-${c('actual')})/(${c('periodDays')}-N(${c('elapsedDays')})),"")` },
+        { key: 'elapsedDays', label: '경과 일수', type: 'number', unit: '일', hint: '기간 시작일부터 실적 기준일까지(기준일 포함)',
+          excel: (c) => `IF(AND(ISNUMBER(${c('startDate')}),ISNUMBER(${c('endDate')}),N(${c('endDate')})>=N(${c('startDate')})),MAX(0,MIN(${c('endDate')}-${c('startDate')}+1,IF(ISNUMBER(${c('asOfDate')}),${c('asOfDate')},TODAY())-${c('startDate')}+1)),IF(N(${c('daysPassed')})>0,N(${c('daysPassed')}),""))` },
+        { key: 'periodDays', label: '전체 일수', type: 'number', unit: '일',
+          excel: (c) => `IF(AND(ISNUMBER(${c('startDate')}),ISNUMBER(${c('endDate')}),N(${c('endDate')})>=N(${c('startDate')})),${c('endDate')}-${c('startDate')}+1,IF(N(${c('daysTotal')})>0,N(${c('daysTotal')}),""))` },
       ],
     },
 
@@ -349,8 +422,17 @@
 
   function defaults(id) {
     const o = {};
-    for (const f of CALCS[id].fields) o[f.key] = f.default !== undefined ? String(f.default) : '';
+    for (const f of CALCS[id].fields) {
+      if (Array.isArray(f.default)) o[f.key] = f.default.slice();
+      else o[f.key] = f.default !== undefined ? String(f.default) : '';
+    }
     return o;
+  }
+
+  // 화면·엑셀·AI가 모두 같은 값을 보도록 입력값을 정리 (기본값 채우기 + 계산기별 normalize)
+  function normalize(id, values) {
+    const v = Object.assign(defaults(id), values || {});
+    return CALCS[id].normalize ? CALCS[id].normalize(v) : v;
   }
 
   function fmt(value, type) {
@@ -365,27 +447,71 @@
     if (value === '' || value === undefined || value === null) return '';
     if (type === 'percent') return value + '%';
     if (type === 'money') return n(value).toLocaleString('ko-KR') + '원';
+    if (type === 'bigmoney') return `${korWon(n(value) * MILLION)} (${Math.round(n(value) * MILLION).toLocaleString('ko-KR')}원)`;
     if (type === 'number') return n(value).toLocaleString('ko-KR');
     return String(value);
   }
 
   function run(id, values) {
     const calc = CALCS[id];
-    const v = Object.assign(defaults(id), values || {});
+    const v = normalize(id, values);
     const r = calc.compute(v);
-    return calc.outputs.map((o) => { const text = fmt(r[o.key], o.type); return Object.assign({}, o, { value: r[o.key], text: o.unit && text !== '—' ? text + o.unit : text }); });
+    return calc.outputs.map((o) => {
+      const value = r[o.key];
+      let text = fmt(value, o.type), sub = '';
+      // 큰 금액은 "1억 2,000만원"을 크게, 정확한 원 단위는 보조로 함께 표시
+      if (o.big && text !== '—' && Math.abs(value) >= 1e4) { sub = text; text = korWon(value); }
+      return Object.assign({}, o, { value, text: o.unit && text !== '—' ? text + o.unit : text, sub });
+    });
   }
 
-  function summaryText(id, values) {
+  // 채널별 달성 현황 (목표 달성 계산기). 금액은 원 단위
+  function channelRows(values) {
+    const v = normalize('target', values);
+    const d = targetDays(v);
+    const totalGoal = n(v.goal) * MILLION;
+    return channelsOf(v).map((c, i) => {
+      const goal = n(c.goal) * MILLION, actual = n(c.actual) * MILLION;
+      return Object.assign({ name: String(c.name || '').trim() || `채널 ${i + 1}`, goal, actual, share: div(goal, totalGoal) }, targetMetrics(goal, actual, d));
+    });
+  }
+
+  /* AI에 보내는 요약. opts로 개인정보를 가린다.
+   * - alias: 상품명 등 텍스트 입력을 이 별칭으로 바꿔 보냄 (예: '상품A')
+   * - hideMoney: 금액(원) 입력·결과를 빼고 비율·일수만 보냄 */
+  function summaryText(id, values, opts) {
+    const o = opts || {};
     const calc = CALCS[id];
+    const v = normalize(id, values);
+    const isMoney = (t) => t === 'money' || t === 'bigmoney';
     const lines = [`[${calc.name} 계산기]`];
     for (const f of calc.fields) {
-      if (values[f.key] !== '' && values[f.key] !== undefined) lines.push(`${f.label}: ${fmtInput(values[f.key], f.type)}${f.unit || ''}`);
+      if (f.type === 'channels') continue;
+      const raw = v[f.key];
+      if (raw === '' || raw === undefined) continue;
+      if (f.type === 'text') { lines.push(`${f.label}: ${o.alias || raw}`); continue; }
+      if (o.hideMoney && isMoney(f.type)) { lines.push(`${f.label}: (비공개)`); continue; }
+      lines.push(`${f.label}: ${fmtInput(raw, f.type)}${f.unit || ''}`);
+    }
+    if (id === 'target') {
+      const rows = channelRows(v);
+      if (rows.length) {
+        lines.push('— 채널별 —');
+        for (const r of rows) {
+          lines.push(o.hideMoney
+            ? `${r.name}: 목표 비중 ${fmt(r.share, 'percent')}, 달성률 ${fmt(r.rate, 'percent')}, 마감 예상 달성률 ${fmt(r.forecastRate, 'percent')}`
+            : `${r.name}: 목표 ${korWon(r.goal)}, 실적 ${korWon(r.actual)}, 달성률 ${fmt(r.rate, 'percent')}, 남은 금액 ${korWon(r.remain)}, 마감 예상 달성률 ${fmt(r.forecastRate, 'percent')}, 일평균 필요 ${r.dailyNeed === null ? '—' : korWon(r.dailyNeed)}`);
+        }
+      }
     }
     lines.push('— 결과 —');
-    for (const o of run(id, values)) lines.push(`${o.label}: ${o.text}`);
+    for (const r of run(id, v)) {
+      if (o.hideMoney && isMoney(r.type)) continue;
+      lines.push(`${r.label}: ${r.text}${r.sub ? ` (${r.sub})` : ''}`);
+    }
+    if (o.hideMoney) lines.push('※ 개인정보 보호 설정에 따라 금액은 보내지 않았습니다. 비율과 일수만 보고 조언해 주세요.');
     return lines.join('\n');
   }
 
-  return { CALCS, defaults, run, fmt, fmtInput, summaryText, num: n };
+  return { CALCS, defaults, normalize, run, channelRows, fmt, fmtInput, korWon, dayNum, todayStr, summaryText, num: n, MILLION };
 });

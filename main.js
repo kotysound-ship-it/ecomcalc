@@ -113,8 +113,10 @@ const fingerprint = (k) => require('crypto').createHash('sha256').update(k).dige
 // ───────── AI: 자연어 → 계산기 입력 ─────────
 function calcCatalog() {
   return Object.entries(Calc.CALCS).map(([id, c]) => {
-    const fields = c.fields.map((f) => {
-      const t = f.type === 'percent' ? '퍼센트 숫자(5.5% → "5.5")' : f.type === 'money' ? '원 단위 숫자' : f.type === 'select' ? `다음 중 하나: ${f.options.join(' / ')}` : f.type === 'text' ? '텍스트' : '숫자';
+    const fields = c.fields.filter((f) => f.type !== 'channels').map((f) => {
+      const t = f.type === 'percent' ? '퍼센트 숫자(5.5% → "5.5")' : f.type === 'money' ? '원 단위 숫자'
+        : f.type === 'bigmoney' ? '100만원 단위 숫자(1억 → "100", 3천만원 → "30", 2,500만원 → "25")'
+        : f.type === 'date' ? '날짜 "YYYY-MM-DD"' : f.type === 'select' ? `다음 중 하나: ${f.options.join(' / ')}` : f.type === 'text' ? '텍스트' : '숫자';
       return `    - ${f.key}: ${f.label} — ${t}${f.hint ? ` (${f.hint})` : ''}`;
     }).join('\n');
     return `- ${id} (${c.name} 계산기: ${c.desc})\n${fields}`;
@@ -153,6 +155,8 @@ ${calcCatalog()}
 - 사용자가 플랫폼명(예: 스마트스토어, 쿠팡)만 말하고 수수료율을 말하지 않았다면 수수료를 추측해 채우지 말고 note에 "수수료율을 입력해 주세요"라고 안내합니다.
 - 영업이익률 계산기의 광고비: "매출의 10%" 같은 비율은 adRate, "월 100만원"처럼 기간 총액은 adFixed에 넣고, 판매 예상 수량이 있으면 salesQty에 넣습니다. 상품 1개당 광고비로 말한 금액(예: "개당 광고비 500원")은 adFixed=500, salesQty=1로 넣습니다.
 - 쿠폰: "10% 쿠폰"은 couponRate, "3천원 쿠폰"은 couponFixed.
+- 목표 달성 계산기의 goal·actual은 100만원 단위입니다. "목표 3억" → "300", "실적 1억 2천" → "120".
+- 날짜는 "YYYY-MM-DD"로 적습니다. 연도를 말하지 않았으면 오늘(${Calc.todayStr()}) 기준으로 가장 가까운 해를 씁니다. "이번 달"은 이번 달 1일~말일입니다.
 - 사용자가 지금 보고 있는 계산기와 관련된 후속 입력이면 같은 계산기를 유지합니다.
 - note에는 무엇을 채웠는지, 빠진 중요한 값이 무엇인지 한국어 한두 문장으로 적습니다.`;
 
@@ -166,7 +170,9 @@ function sanitizeParsed(parsed) {
     const f = calc.fields.find((x) => x.key === item.field);
     if (!f) continue;
     const value = String(item.value === undefined || item.value === null ? '' : item.value);
+    if (f.type === 'channels') continue;
     if (f.type === 'select') { if (f.options.includes(value)) valid[f.key] = value; }
+    else if (f.type === 'date') { if (Calc.dayNum(value) !== null) valid[f.key] = value; }
     else if (f.type === 'text') valid[f.key] = value;
     else { const num = Number(value.replace(/[^0-9.\-]/g, '')); if (value.trim() !== '' && isFinite(num)) valid[f.key] = String(num); }
   }
@@ -196,7 +202,9 @@ const ADVISOR_SYSTEM = `당신은 한국 이커머스(스마트스토어, 쿠팡
 - 그다음 개선 액션 3개 이내를 우선순위대로 제시합니다(가격, 원가, 수수료/채널, 쿠폰·프로모션, 광고 ROAS, 배송비 등 해당되는 것만). 각 액션에 기대 효과를 구체적으로 적습니다.
 - 마지막에 놓치기 쉬운 리스크나 확인할 점 1~2개.
 - 마크다운 소제목·굵게·목록을 사용하되 전체 400자~700자 내외로 간결하게. 한국어 존댓말.
-- 플랫폼 수수료율 등 외부 정보는 변동될 수 있으니 확정적으로 단정하지 말고 "확인 필요"를 붙입니다.`;
+- 플랫폼 수수료율 등 외부 정보는 변동될 수 있으니 확정적으로 단정하지 말고 "확인 필요"를 붙입니다.
+- 행사·프로모션 날짜를 기억에 의존해 단정하지 않습니다. 사용자가 알려 준 일정만 날짜로 언급하고, 그 밖의 행사는 "일정 확인 필요"로 적습니다.
+- 상품명이 "상품A"처럼 별칭으로 오면 그 별칭 그대로 부르고, 실제 이름을 추측하지 않습니다. "(비공개)"로 온 금액은 추측하지 말고 비율·일수만으로 조언합니다.`;
 
 const streams = new Map();
 async function aiChat(e, { id, messages }) {

@@ -26,18 +26,31 @@ function layout(id) {
   const calc = Calc.CALCS[id];
   const cols = [];
   META_COLS.forEach((m) => cols.push({ kind: 'meta', ...m }));
-  calc.fields.forEach((f) => cols.push({ kind: 'input', key: f.key, label: f.label + unitSuffix(f.type), field: f }));
+  calc.fields.filter((f) => f.type !== 'channels').forEach((f) => cols.push({ kind: 'input', key: f.key, label: f.label + unitSuffix(f.type), field: f }));
   calc.outputs.forEach((o) => cols.push({ kind: 'output', key: o.key, label: o.label + unitSuffix(o.type), output: o }));
   cols.forEach((c, i) => { c.index = i + 1; c.letter = colLetter(i + 1); });
   return cols;
 }
 
+// 큰 금액(백만원 단위 입력)도 엑셀에는 원 단위로 기록한다
 function unitSuffix(type) {
-  return type === 'money' ? ' (원)' : type === 'percent' ? ' (%)' : '';
+  return type === 'money' || type === 'bigmoney' ? ' (원)' : type === 'percent' ? ' (%)' : '';
+}
+
+// 입력값 → 엑셀 셀 값
+function inputCellValue(f, raw) {
+  if (raw === '' || raw === undefined || raw === null) return null;
+  if (f.type === 'percent') return Calc.num(raw) / 100;
+  if (f.type === 'bigmoney') return Math.round(Calc.num(raw) * Calc.MILLION * 100) / 100;
+  if (f.type === 'money' || f.type === 'number') return Calc.num(raw);
+  if (f.type === 'date') { const d = Calc.dayNum(raw); return d === null ? null : new Date(d * 86400000); }
+  if (f.type === 'select' && f.options.every((o) => !isNaN(Number(o)))) return Number(raw);
+  return String(raw);
 }
 
 function numFmt(type) {
-  if (type === 'money') return '#,##0;[Red]-#,##0';
+  if (type === 'date') return 'yyyy-mm-dd';
+  if (type === 'money' || type === 'bigmoney') return '#,##0;[Red]-#,##0';
   if (type === 'percent') return '0.0%;[Red]-0.0%';
   if (type === 'number') return '#,##0.##';
   return undefined;
@@ -98,19 +111,15 @@ function writeRecord(wb, rec) {
   const computed = {};
   Calc.run(rec.calc, rec.values).forEach((o) => { computed[o.key] = o.value; });
   const row = ws.getRow(r);
-  const values = Object.assign(Calc.defaults(rec.calc), rec.values);
+  const values = Calc.normalize(rec.calc, rec.values);
 
   cols.forEach((c) => {
     const cell = row.getCell(c.index);
     if (c.key === '_date') { cell.value = new Date(rec.date || Date.now()); cell.numFmt = 'yyyy-mm-dd hh:mm'; return; }
     if (c.key === '_memo') { cell.value = rec.memo || ''; return; }
     if (c.kind === 'input') {
-      const f = c.field; const raw = values[f.key];
-      if (raw === '' || raw === undefined) cell.value = null;
-      else if (f.type === 'percent') cell.value = Calc.num(raw) / 100;
-      else if (f.type === 'money' || f.type === 'number') cell.value = Calc.num(raw);
-      else if (f.type === 'select' && f.options.every((o) => !isNaN(Number(o)))) cell.value = Number(raw);
-      else cell.value = String(raw);
+      const f = c.field;
+      cell.value = inputCellValue(f, values[f.key]);
       if (numFmt(f.type)) cell.numFmt = numFmt(f.type);
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF3FD' } };
       return;
@@ -122,7 +131,59 @@ function writeRecord(wb, rec) {
     if (o.primary) cell.font = { bold: true };
   });
   row.commit();
+  if (rec.calc === 'target') writeChannelRows(wb, rec, values, computed);
   return { sheet: ws.name, row: r };
+}
+
+// 목표 달성: 채널별 목표·실적을 별도 시트에 채널마다 한 줄씩 기록 (결과는 엑셀 함수)
+const CH_SHEET = '목표 달성_채널별';
+const CH_COLS = [
+  ['기록일시', 18, 'yyyy-mm-dd hh:mm'], ['메모', 18], ['기간 시작일', 12, 'yyyy-mm-dd'], ['기간 종료일', 12, 'yyyy-mm-dd'],
+  ['경과 일수', 10, '#,##0'], ['전체 일수', 10, '#,##0'], ['채널', 16],
+  ['목표 매출 (원)', 16, '#,##0;[Red]-#,##0'], ['현재 실적 (원)', 16, '#,##0;[Red]-#,##0'],
+  ['달성률 (%)', 11, '0.0%;[Red]-0.0%'], ['남은 금액 (원)', 16, '#,##0;[Red]-#,##0'],
+  ['마감 예상 실적 (원)', 18, '#,##0;[Red]-#,##0'], ['마감 예상 달성률 (%)', 14, '0.0%;[Red]-0.0%'], ['남은 기간 일평균 필요 (원)', 18, '#,##0;[Red]-#,##0'],
+];
+function writeChannelRows(wb, rec, values, computed) {
+  const rows = Calc.channelRows(values);
+  if (!rows.length) return;
+  let ws = wb.getWorksheet(CH_SHEET);
+  if (!ws) {
+    ws = wb.addWorksheet(CH_SHEET, { views: [{ state: 'frozen', ySplit: 1 }] });
+    const h = ws.getRow(1);
+    CH_COLS.forEach(([label, width], i) => {
+      const cell = h.getCell(i + 1); cell.value = label;
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i < 2 ? COLORS.meta : i < 9 ? COLORS.input : COLORS.output } };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      ws.getColumn(i + 1).width = width;
+    });
+    h.height = 32;
+    ws.autoFilter = { from: 'A1', to: `${colLetter(CH_COLS.length)}1` };
+  }
+  const date = (k) => { const d = Calc.dayNum(values[k]); return d === null ? null : new Date(d * 86400000); };
+  const num = (x) => (x === null || x === undefined || !isFinite(x) ? null : x);
+  let r = lastDataRow(ws);
+  for (const ch of rows) {
+    r++;
+    const row = ws.getRow(r);
+    const E = `E${r}`, F = `F${r}`, H = `H${r}`, I = `I${r}`;
+    const vals = [
+      new Date(rec.date || Date.now()), rec.memo || '', date('startDate'), date('endDate'),
+      num(computed.elapsedDays), num(computed.periodDays), ch.name, ch.goal, ch.actual,
+      { formula: `IF(${H}=0,"",${I}/${H})`, result: num(ch.rate) === null ? '' : ch.rate },
+      { formula: `${H}-${I}`, result: ch.remain },
+      { formula: `IF(AND(N(${E})>0,N(${F})>0),${I}/${E}*${F},"")`, result: num(ch.forecast) === null ? '' : ch.forecast },
+      { formula: `IF(OR(L${r}="",${H}=0),"",L${r}/${H})`, result: num(ch.forecastRate) === null ? '' : ch.forecastRate },
+      { formula: `IF(AND(N(${F})>0,N(${F})>N(${E})),MAX(0,${H}-${I})/(${F}-N(${E})),"")`, result: num(ch.dailyNeed) === null ? '' : ch.dailyNeed },
+    ];
+    vals.forEach((val, i) => {
+      const cell = row.getCell(i + 1); cell.value = val;
+      if (CH_COLS[i][2]) cell.numFmt = CH_COLS[i][2];
+      if (i >= 2 && i <= 8) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF3FD' } };
+    });
+    row.commit();
+  }
 }
 
 // 요약 시트: 장부 전체를 함수로 집계
@@ -181,4 +242,4 @@ async function appendRecords(file, records) {
   return results;
 }
 
-module.exports = { appendRecords, layout };
+module.exports = { appendRecords, layout, CH_SHEET };
