@@ -59,6 +59,43 @@ async function readSSE(res, onData, signal) {
   }
 }
 
+// ───────── 첨부 자료(이미지·PDF) → 공급자별 메시지 형식 ─────────
+// 메시지: { role, content: 문자열, attachments?: [{ kind: 'image'|'pdf', mime, name, data(base64) }] }
+// 텍스트 파일은 앱(화면)에서 본문에 합쳐 보내므로(개인정보 가리기 적용) 여기엔 이미지·PDF만 온다
+const hasAtt = (m) => Array.isArray(m.attachments) && m.attachments.length > 0;
+const dataUrl = (a) => `data:${a.mime};base64,${a.data}`;
+const noPdfNote = (a) => `\n\n(첨부 PDF「${a.name}」은 지금 연결된 AI가 직접 읽을 수 없어 빠졌습니다.)`;
+
+function toAnthropicMessages(messages) {
+  return messages.map((m) => {
+    if (!hasAtt(m)) return { role: m.role, content: m.content };
+    const blocks = m.attachments.map((a) => (a.kind === 'pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: a.data }, title: a.name }
+      : { type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } }));
+    blocks.push({ type: 'text', text: m.content });
+    return { role: m.role, content: blocks };
+  });
+}
+function toOpenAIMessages(messages, provider) {
+  return messages.map((m) => {
+    if (!hasAtt(m)) return { role: m.role, content: m.content };
+    let text = m.content;
+    const parts = [];
+    for (const a of m.attachments) {
+      if (a.kind === 'image') parts.push({ type: 'image_url', image_url: { url: dataUrl(a) } });
+      else if (provider === 'openai') parts.push({ type: 'file', file: { filename: a.name, file_data: dataUrl(a) } });
+      else text += noPdfNote(a);
+    }
+    return { role: m.role, content: [{ type: 'text', text }, ...parts] };
+  });
+}
+function toGeminiContents(messages) {
+  return messages.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [...(hasAtt(m) ? m.attachments.map((a) => ({ inlineData: { mimeType: a.mime, data: a.data } })) : []), { text: m.content }],
+  }));
+}
+
 // ───────── Anthropic ─────────
 function anthropicClient(cfg) { return new Anthropic({ apiKey: cfg.key, baseURL: ANTHROPIC_BASE() }); }
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -93,7 +130,7 @@ const anthropic = {
         model: cfg.model, max_tokens: 16000,
         betas: [FALLBACK_BETA], fallbacks: 'default',
         output_config: { effort: 'medium' },
-        system, messages,
+        system, messages: toAnthropicMessages(messages),
       });
       if (signal) signal.addEventListener('abort', () => s.abort());
       s.on('text', onText);
@@ -143,7 +180,7 @@ const openaiCompat = {
   async stream(cfg, { system, messages, onText, signal }) {
     const res = await fetch(`${oaBase(cfg)}/chat/completions`, {
       method: 'POST', headers: oaHeaders(cfg), signal,
-      body: JSON.stringify({ model: cfg.model, stream: true, messages: [{ role: 'system', content: system }, ...messages] }),
+      body: JSON.stringify({ model: cfg.model, stream: true, messages: [{ role: 'system', content: system }, ...toOpenAIMessages(messages, cfg.provider)] }),
     }).catch((e) => { if (e.name === 'AbortError') return null; throw new AIError(`${oaLabel(cfg)}에 연결할 수 없습니다.`, 'NET'); });
     if (!res) return;
     if (!res.ok) throw await httpError(res, oaLabel(cfg));
@@ -164,7 +201,7 @@ const gemini = {
   body(system, messages, extra) {
     return JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
-      contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+      contents: toGeminiContents(messages),
       ...extra,
     });
   },
@@ -216,4 +253,4 @@ async function detectOllama() {
   } catch { return null; }
 }
 
-module.exports = { PROVIDERS, IMPL, AIError, detectOllama, extractJSON };
+module.exports = { PROVIDERS, IMPL, AIError, detectOllama, extractJSON, toAnthropicMessages, toOpenAIMessages, toGeminiContents };

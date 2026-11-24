@@ -369,6 +369,44 @@ module.exports = ({ app, win, clipboard }) => {
       return `배지 "${badge}" · 상품명 → 상품A (분석·질문 모두) · 금액 숨김 모드에서 금액 미전송`;
     });
 
+    await step('AI 자료 첨부: 끌어다 놓기(스크린샷) / ＋ 버튼(텍스트) → AI에 이미지·본문 전달', async () => {
+      const lastBody = () => { const r = mock.state.requests.filter((x) => x.path.startsWith('/ollama') && x.method === 'POST' && x.body && x.body.stream); return r[r.length - 1].body; };
+      await js(`${H} $('#aiClear').click();
+        const c = document.createElement('canvas'); c.width = 3000; c.height = 1500; const g = c.getContext('2d'); g.fillStyle = '#4f46e5'; g.fillRect(0, 0, 3000, 1500);
+        const png = await new Promise((r) => c.toBlob(r, 'image/png'));
+        const dt = new DataTransfer(); dt.items.add(new File([png], '쿠팡_정산화면.png', { type: 'image/png' }));
+        document.querySelector('main').dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt, bubbles: true }));
+        window.__dropShown = !document.getElementById('aiDrop').hidden;
+        document.querySelector('main').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }));
+        const dt2 = new DataTransfer(); dt2.items.add(new File(['상품,판매량\\n비밀 린넨 셔츠,120\\n'], '판매량.csv', { type: 'text/csv' }));
+        const inp = $('#aiFile'); inp.files = dt2.files; inp.dispatchEvent(new Event('change'));
+        const bad = new DataTransfer(); bad.items.add(new File(['x'], '장부.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        inp.files = bad.files; inp.dispatchEvent(new Event('change'));`);
+      await until(`document.querySelectorAll('#aiAttachList .att-chip').length === 2`);
+      const ui = await js(`return { drop: window.__dropShown, chips: [...document.querySelectorAll('#aiAttachList .att-name')].map((x) => x.textContent), note: (document.querySelector('.att-note') || {}).textContent, toast: document.getElementById('toast').textContent, open: document.getElementById('aiPanel').classList.contains('open') };`);
+      ok(ui.drop && ui.open && ui.chips.join() === '쿠팡_정산화면.png,판매량.csv', '첨부 칩 ' + JSON.stringify(ui));
+      ok(/이미지·PDF·텍스트/.test(ui.toast), '지원하지 않는 형식 안내 ' + ui.toast);
+      ok(/가려지지 않고/.test(ui.note || ''), '이미지 개인정보 안내');
+      await shot('05-ai-attach');
+      await js(`${H} $('#aiAsk').value = '이 정산 화면 기준으로 마진 괜찮아?'; $('#aiCompose').requestSubmit();`);
+      await until(`(() => { const m = document.querySelectorAll('.msg.assistant'); const l = m[m.length-1]; return l && !l.classList.contains('typing'); })()`);
+      const b = lastBody(); const last = b.messages[b.messages.length - 1];
+      ok(Array.isArray(last.content), '첨부가 있으면 content 배열');
+      const txt = last.content.find((p) => p.type === 'text').text; const img = last.content.find((p) => p.type === 'image_url');
+      ok(img && /^data:image\/png;base64,/.test(img.image_url.url), '이미지 전달');
+      const dims = await js(`const im = new Image(); im.src = ${JSON.stringify(img ? img.image_url.url : '')}; await im.decode(); return [im.naturalWidth, im.naturalHeight];`);
+      ok(dims[0] === 1568 && dims[1] === 784, '큰 이미지 축소 ' + dims);
+      ok(txt.includes('[첨부 파일: 판매량.csv]') && txt.includes('상품A,120') && !txt.includes('비밀 린넨 셔츠'), '텍스트 첨부 + 상품명 가림 ' + txt.slice(0, 200));
+      const shown = await js(`return { thumbs: document.querySelectorAll('.msg-atts img').length, pending: document.getElementById('aiAttachList').hidden };`);
+      ok(shown.thumbs === 1 && shown.pending, '보낸 메시지에 썸네일, 첨부 목록 비움 ' + JSON.stringify(shown));
+      // 다음 질문에도 이전 이미지가 대화 맥락으로 함께 간다
+      await js(`${H} $('#aiAsk').value = '그럼 가격은?'; $('#aiCompose').requestSubmit();`);
+      await until(`(() => { const m = document.querySelectorAll('.msg.assistant'); const l = m[m.length-1]; return l && !l.classList.contains('typing') && m.length === 2; })()`);
+      const b2 = lastBody();
+      ok(b2.messages.length === 4 && Array.isArray(b2.messages[1].content) && typeof b2.messages[3].content === 'string', '후속 질문 맥락');
+      return `드롭 안내 표시 · 칩 2개(png, csv) · xlsx 거부 · 3000×1500 → ${dims.join('×')} 축소 전달 · CSV 본문 상품명 → 상품A`;
+    });
+
     // ───────── 9. 클라우드 공급자 3종 + 직접 입력 서버 ─────────
     process.env.ECOM_OLLAMA_URL = 'http://127.0.0.1:9';
     async function setup(provider, key, extra = '') {

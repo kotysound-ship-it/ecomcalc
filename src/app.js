@@ -682,14 +682,124 @@
     send(`다음 계산 결과를 분석하고 개선 방안을 알려주세요.\n\n${aiSummary()}`, true);
   }
 
+  // ───────── 첨부 자료: ＋ 버튼 / 끌어다 놓기 / 붙여넣기 ─────────
+  // 이미지는 긴 변 1568px 이하로 줄여(AI가 읽는 최대 해상도) 보내고, 텍스트 파일은 본문에 합쳐 개인정보 가리기를 적용한다
+  const ATT = { max: 5, imgEdge: 1568, imgBytes: 3.5 * 1024 * 1024, pdfBytes: 10 * 1024 * 1024, textBytes: 1024 * 1024, textChars: 30000 };
+  const IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  const TEXT_EXT = /\.(txt|csv|tsv|md|json)$/i;
+  state.pending = [];
+  const kb = (n) => (n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB');
+  const readAs = (file, how) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r[how](file); });
+  const b64 = (dataUrl) => String(dataUrl).slice(String(dataUrl).indexOf(',') + 1);
+
+  async function imageAttachment(file) {
+    let url = await readAs(file, 'readAsDataURL');
+    let mime = file.type;
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, ATT.imgEdge / Math.max(bmp.width, bmp.height));
+    if (scale < 1 || file.size > ATT.imgBytes) {
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      mime = mime === 'image/png' ? 'image/png' : 'image/jpeg';
+      url = c.toDataURL(mime, 0.88);
+      if (b64(url).length * 0.75 > ATT.imgBytes) { mime = 'image/jpeg'; url = c.toDataURL(mime, 0.8); }
+    }
+    bmp.close && bmp.close();
+    return { kind: 'image', mime, name: file.name || '스크린샷.png', data: b64(url), preview: url };
+  }
+
+  // 여러 번 연달아 넣어도 넣은 순서대로, 개수 제한을 지키며 처리
+  let addQueue = Promise.resolve();
+  function addFiles(files) { const list = [...files]; addQueue = addQueue.then(() => addFilesNow(list)); return addQueue; }
+  async function addFilesNow(list) {
+    if (!list.length) return;
+    openPanel();
+    for (const file of list) {
+      if (state.pending.length >= ATT.max) { toast(`한 번에 ${ATT.max}개까지 첨부할 수 있어요`, { err: true }); break; }
+      const name = file.name || '';
+      try {
+        if (IMG_TYPES.includes(file.type)) state.pending.push(await imageAttachment(file));
+        else if (file.type === 'application/pdf' || /\.pdf$/i.test(name)) {
+          if (file.size > ATT.pdfBytes) { toast(`PDF는 ${kb(ATT.pdfBytes)}까지 첨부할 수 있어요 (${name})`, { err: true }); continue; }
+          state.pending.push({ kind: 'pdf', mime: 'application/pdf', name, data: b64(await readAs(file, 'readAsDataURL')), size: file.size });
+        } else if (file.type.startsWith('text/') || file.type === 'application/json' || TEXT_EXT.test(name)) {
+          if (file.size > ATT.textBytes) { toast(`텍스트 파일은 ${kb(ATT.textBytes)}까지 첨부할 수 있어요 (${name})`, { err: true }); continue; }
+          let text = await readAs(file, 'readAsText');
+          const cut = text.length > ATT.textChars;
+          if (cut) text = text.slice(0, ATT.textChars);
+          state.pending.push({ kind: 'text', name, text, cut, size: file.size });
+        } else {
+          toast(`이미지·PDF·텍스트(CSV·TXT·MD·JSON) 파일만 첨부할 수 있어요${name ? ` (${name})` : ''}`, { err: true });
+        }
+      } catch (err) {
+        toast(`파일을 읽지 못했어요${name ? ` (${name})` : ''}`, { err: true });
+      }
+    }
+    renderPending();
+    $('#aiAsk').focus();
+  }
+
+  function attChip(a, i) {
+    const el = document.createElement('div'); el.className = 'att-chip ' + a.kind;
+    const label = a.kind === 'image' ? '' : `<span class="att-ico">${a.kind === 'pdf' ? 'PDF' : 'TXT'}</span>`;
+    el.innerHTML = (a.kind === 'image' ? `<img alt="" src="${a.preview}">` : label) +
+      `<span class="att-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</span>` +
+      (a.cut ? '<span class="att-cut" title="앞부분 3만 자만 보내요">일부</span>' : '') +
+      (i !== undefined ? `<button type="button" class="att-x" data-i="${i}" title="첨부 빼기">✕</button>` : '');
+    return el;
+  }
+  function renderPending() {
+    const box = $('#aiAttachList'); box.innerHTML = '';
+    box.hidden = !state.pending.length;
+    state.pending.forEach((a, i) => box.append(attChip(a, i)));
+    if (state.pending.some((a) => a.kind !== 'text') && state.privacy !== 'off') {
+      const n = document.createElement('div'); n.className = 'att-note';
+      n.textContent = '이미지·PDF 속 상품명·금액은 가려지지 않고 그대로 AI에 전달돼요';
+      box.append(n);
+    }
+  }
+  $('#aiAttachList').onclick = (e) => {
+    const x = e.target.closest('.att-x'); if (!x) return;
+    state.pending.splice(Number(x.dataset.i), 1); renderPending();
+  };
+  $('#aiAttach').onclick = () => $('#aiFile').click();
+  $('#aiFile').onchange = (e) => { addFiles(e.target.files); e.target.value = ''; };
+  $('#aiAsk').addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData && e.clipboardData.files || [])];
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
+  // 창 어디에 놓아도 첨부(파일을 놓으면 창이 그 파일로 바뀌는 기본 동작 차단)
+  let dragDepth = 0;
+  const isFileDrag = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  document.addEventListener('dragenter', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); dragDepth++; openPanel(); $('#aiDrop').hidden = false; });
+  document.addEventListener('dragover', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  document.addEventListener('dragleave', (e) => { if (!isFileDrag(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('#aiDrop').hidden = true; });
+  document.addEventListener('drop', (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); dragDepth = 0; $('#aiDrop').hidden = true;
+    addFiles(e.dataTransfer.files);
+  });
+
+  // 텍스트 파일은 질문 본문 뒤에 붙인다(가리기 적용 전 원문)
+  function withTextFiles(text, atts) {
+    const t = atts.filter((a) => a.kind === 'text');
+    if (!t.length) return text;
+    return text + t.map((a) => `\n\n[첨부 파일: ${a.name}${a.cut ? ' — 앞부분만' : ''}]\n\`\`\`\n${a.text}\n\`\`\``).join('');
+  }
+
   function send(text, isContext) {
     if (activeId) return;
     openPanel();
+    const atts = state.pending; state.pending = []; renderPending();
+    if (!text && atts.length) text = '첨부한 자료를 확인하고, 현재 계산 결과와 연결해서 조언해 주세요.';
     // AI 회사로는 가린 내용을 보내고, 화면에는 사용자가 쓴 그대로(첫 요약은 실제로 보낸 내용) 보여 준다
-    const out = maskText(text);
-    state.thread.push({ role: 'user', content: out });
-    const u = document.createElement('div'); u.className = 'msg user' + (isContext ? ' context' : ''); u.textContent = isContext ? out : text;
+    const out = maskText(withTextFiles(text, atts));
+    const bin = atts.filter((a) => a.kind !== 'text').map(({ kind, mime, name, data }) => ({ kind, mime, name, data }));
+    state.thread.push(Object.assign({ role: 'user', content: out }, bin.length ? { attachments: bin } : {}));
+    const u = document.createElement('div'); u.className = 'msg user' + (isContext ? ' context' : ''); u.textContent = isContext ? maskText(text) : text;
     if (isContext) u.title = '실제로 AI에 보낸 내용이에요';
+    if (atts.length) { const g = document.createElement('div'); g.className = 'msg-atts'; atts.forEach((a) => g.append(attChip(a))); $('#aiThread').append(g); }
     $('#aiThread').append(u);
     const a = document.createElement('div'); a.className = 'msg assistant typing'; a.dataset.raw = '';
     $('#aiThread').append(a);
@@ -697,7 +807,7 @@
     a.dataset.id = activeId;
     setBusy(true);
     // 대화 중 계산값이 바뀌었으면 최신 수치를 함께 보낸다
-    const msgs = state.thread.map((m) => ({ role: m.role, content: m.content }));
+    const msgs = state.thread.map((m) => Object.assign({ role: m.role, content: m.content }, m.attachments ? { attachments: m.attachments } : {}));
     if (!isContext && state.thread.length > 1) {
       msgs[msgs.length - 1].content = `${out}\n\n(참고: 현재 계산기 화면 값)\n${aiSummary()}`;
     }
@@ -726,13 +836,13 @@
 
   $('#aiCompose').onsubmit = (e) => {
     e.preventDefault();
-    const t = $('#aiAsk').value.trim(); if (!t) return;
+    const t = $('#aiAsk').value.trim(); if (!t && !state.pending.length) return;
     $('#aiAsk').value = ''; send(t, false);
   };
   $('#aiAsk').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#aiCompose').requestSubmit(); } };
   $('#aiStop').onclick = () => { if (activeId) api.abort(activeId); };
   $('#aiClose').onclick = closePanel;
-  $('#aiClear').onclick = () => { if (activeId) api.abort(activeId); state.thread = []; state.aliases = []; $('#aiThread').innerHTML = '<div class="empty">계산 후 ✨ AI 분석을 누르거나, 아래에 질문을 입력하세요.</div>'; };
+  $('#aiClear').onclick = () => { if (activeId) api.abort(activeId); state.thread = []; state.aliases = []; state.pending = []; renderPending(); $('#aiThread').innerHTML = '<div class="empty">계산 후 ✨ AI 분석을 누르거나, 아래에 질문을 입력하세요.</div>'; };
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function md(src) {

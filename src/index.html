@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:" />
   <title>이커머스 AI 계산기</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -98,8 +98,12 @@
         </div>
       </div>
       <div class="ai-thread" id="aiThread"></div>
+      <div class="ai-drop" id="aiDrop" hidden><div>📎 여기에 놓으면 첨부돼요<small>이미지 · PDF · 텍스트(CSV·TXT·MD·JSON)</small></div></div>
+      <div class="ai-attach-list" id="aiAttachList" hidden></div>
       <form class="ai-compose" id="aiCompose">
-        <textarea id="aiAsk" rows="2" placeholder="추가로 물어보세요 — 예) 쿠팡으로 옮기면? 1+1 행사하면 남아?"></textarea>
+        <button class="ghost attach-btn" id="aiAttach" type="button" title="파일 첨부 (이미지·PDF·텍스트) — 끌어다 놓거나 ⌘V로 붙여넣어도 돼요">＋</button>
+        <input type="file" id="aiFile" multiple hidden accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf,.txt,.csv,.tsv,.md,.json,text/plain,text/csv" />
+        <textarea id="aiAsk" rows="2" placeholder="추가로 물어보세요 — 예) 쿠팡으로 옮기면? 스크린샷은 끌어다 놓거나 ＋로 첨부"></textarea>
         <button class="primary small" id="aiSend" type="submit">보내기</button>
         <button class="small" id="aiStop" type="button" hidden>중지</button>
       </form>

@@ -210,3 +210,26 @@ console.log(`✓ 엑셀 수식 == 앱 계산: ${checked}개 값 일치`);
   console.log(`✓ xlsx 생성/추가 OK → ${file}`);
   console.log(`  예) ${pc}3 = ${cell.formula}  (값 ${Math.round(cell.result)})`);
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// ───────── AI 첨부 자료 → 공급자별 메시지 형식 ─────────
+{
+  const AI = require('../src/ai');
+  const msgs = [
+    { role: 'user', content: '이 화면 봐줘', attachments: [{ kind: 'image', mime: 'image/png', name: 'a.png', data: 'QUJD' }, { kind: 'pdf', mime: 'application/pdf', name: 'r.pdf', data: 'UERG' }] },
+    { role: 'assistant', content: '네' },
+  ];
+  const an = AI.toAnthropicMessages(msgs);
+  assert.deepStrictEqual(an[0].content.map((b) => b.type), ['image', 'document', 'text']);
+  assert.strictEqual(an[0].content[0].source.data, 'QUJD');
+  assert.strictEqual(an[1].content, '네');
+  const oa = AI.toOpenAIMessages(msgs, 'openai');
+  assert.deepStrictEqual(oa[0].content.map((b) => b.type), ['text', 'image_url', 'file']);
+  assert.strictEqual(oa[0].content[1].image_url.url, 'data:image/png;base64,QUJD');
+  const ol = AI.toOpenAIMessages(msgs, 'local');
+  assert.deepStrictEqual(ol[0].content.map((b) => b.type), ['text', 'image_url'], 'PDF 미지원 공급자는 빼고 안내');
+  assert.ok(ol[0].content[0].text.includes('r.pdf'));
+  const gm = AI.toGeminiContents(msgs);
+  assert.deepStrictEqual(gm[0].parts.map((p) => Object.keys(p)[0]), ['inlineData', 'inlineData', 'text']);
+  assert.strictEqual(gm[1].role, 'model');
+  console.log('✓ AI 첨부 자료 형식 (Claude 이미지·문서 / OpenAI image_url·file / 로컬 PDF 제외 / Gemini inlineData)');
+}

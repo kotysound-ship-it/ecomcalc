@@ -205,10 +205,30 @@ const ADVISOR_SYSTEM = `당신은 한국 이커머스(스마트스토어, 쿠팡
 - 플랫폼 수수료율 등 외부 정보는 변동될 수 있으니 확정적으로 단정하지 말고 "확인 필요"를 붙입니다.
 - 「채널 행사·예상」으로 온 일정은 지난 개최 기록으로 잡은 예상 시기입니다. 날짜를 단정하지 말고 "채널 공지 확인 필요"를 붙이며, 신뢰도가 낮으면 그 행사에 의존한 계획을 권하지 않습니다.
 - 행사·프로모션 날짜를 기억에 의존해 단정하지 않습니다. 사용자가 알려 준 일정만 날짜로 언급하고, 그 밖의 행사는 "일정 확인 필요"로 적습니다.
+- 사용자가 스크린샷·PDF·표 파일 같은 자료를 첨부하면 참고 자료로 읽습니다. 자료에서 읽은 숫자는 "첨부 자료 기준"이라고 밝히고, 앱 계산 결과와 다르면 앱 계산 결과를 우선하며 차이를 짚어 줍니다. 흐리거나 잘려서 읽기 어려운 부분은 추측하지 말고 읽기 어렵다고 말합니다.
 - 상품명이 "상품A"처럼 별칭으로 오면 그 별칭 그대로 부르고, 실제 이름을 추측하지 않습니다. "(비공개)"로 온 금액은 추측하지 말고 비율·일수만으로 조언합니다.`;
 
+// 화면에서 온 대화를 검사: 역할·문자열만 통과, 첨부는 이미지(png/jpeg/gif/webp)·PDF의 base64만, 크기 제한
+const ATT_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf'];
+const ATT_MAX = 14 * 1024 * 1024; // base64 길이 기준, 메시지 하나당
+function cleanMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).filter((m) => m && (m.role === 'user' || m.role === 'assistant')).map((m) => {
+    const out = { role: m.role, content: String(m.content || '') };
+    if (m.role === 'user' && Array.isArray(m.attachments)) {
+      let total = 0;
+      const atts = m.attachments.filter((a) => a && ATT_MIME.includes(a.mime) && typeof a.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(a.data))
+        .filter((a) => (total += a.data.length) <= ATT_MAX)
+        .slice(0, 5)
+        .map((a) => ({ kind: a.mime === 'application/pdf' ? 'pdf' : 'image', mime: a.mime, name: String(a.name || '첨부').slice(0, 120), data: a.data }));
+      if (atts.length) out.attachments = atts;
+    }
+    return out;
+  });
+}
+
 const streams = new Map();
-async function aiChat(e, { id, messages }) {
+async function aiChat(e, { id, messages: raw }) {
+  const messages = cleanMessages(raw);
   const sender = e.sender;
   const send = (ch, d) => { if (!sender.isDestroyed()) sender.send(ch, d); };
   const r = await resolveAI();
