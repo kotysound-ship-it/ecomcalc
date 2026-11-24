@@ -1,4 +1,4 @@
-/* global Calc, api */
+/* global Calc, Events, api */
 (function () {
   const $ = (s) => document.querySelector(s);
   const { CALCS } = Calc;
@@ -406,7 +406,146 @@
     renderBreakdown(res, v);
     syncDerived();
     renderChannelResults(v);
+    renderCalendar();
   }
+
+  // ───────── 판매 캘린더 (목표 달성) ─────────
+  // 행사 날짜는 앱 데이터(events.js)에서만. 날짜를 누르면 그날의 판매 계획을 적는다
+  const WD = ['일', '월', '화', '수', '목', '금', '토'];
+  let calSel = null, calConfirming = null;
+  const KIND_TAG = { holiday: '공휴일·연휴 · 확정', day: '기념일 · 확정', season: '판매 시즌', expected: '채널 행사 · 예상', channel: '채널 행사 · 내가 확정' };
+  // 채널 행사: 내가 확정한 날짜와 보여 줄 채널 선택은 이 컴퓨터에 저장
+  state.eventConfirm = store.get('eventConfirm', {});
+  Events.setConfirmed(state.eventConfirm);
+  const CH_KEYS = [['네이버(스마트스토어)', /네이버|스마트스토어|스스/], ['쿠팡', /쿠팡/], ['11번가', /11번가/], ['G마켓·옥션', /G마켓|지마켓|옥션/i], ['SSG닷컴', /SSG|쓱/i],
+    ['롯데온', /롯데온/], ['카카오', /카카오/], ['올리브영', /올리브영|올영/], ['무신사', /무신사/], ['29CM', /29CM|이구/i], ['컬리', /컬리/]];
+  function calChannels() {
+    const saved = store.get('calChannels', null);
+    if (Array.isArray(saved)) return saved.filter((c) => Events.CHANNELS.includes(c));
+    // 처음에는 채널 프리셋·채널별 목표에 쓴 채널만 켜고, 하나도 없으면 전체를 켠다
+    const names = state.presets.map((p) => p.name).concat(((state.values.target || {}).channels || []).map((c) => c && c.name || ''));
+    const hit = CH_KEYS.filter(([, re]) => names.some((n) => re.test(n))).map(([c]) => c);
+    return hit.length ? hit : Events.CHANNELS.slice();
+  }
+  function renderChannelFilter() {
+    const box = $('#calChannels'); const on = calChannels();
+    box.innerHTML = '<span class="muted">채널 행사 보기:</span>';
+    Events.CHANNELS.forEach((c) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = c; b.className = on.includes(c) ? 'on' : '';
+      b.setAttribute('aria-pressed', on.includes(c));
+      b.onclick = () => { const cur = calChannels(); store.set('calChannels', cur.includes(c) ? cur.filter((x) => x !== c) : cur.concat(c)); renderCalendar(); };
+      box.append(b);
+    });
+  }
+  const evChip = (x) => `<span class="ev k-${x.kind}">${x.kind === 'expected' ? '<span class="exp">예상</span>' : ''}${escapeHtml(x.short || x.name)}</span>`;
+  const md2 = (d) => { const t = Events.str(d); return `${+t.slice(5, 7)}/${+t.slice(8, 10)}(${WD[new Date(d * 86400000).getUTCDay()]})`; };
+  function periodOf(v) {
+    const s = Calc.dayNum(v.startDate), e = Calc.dayNum(v.endDate);
+    return s !== null && e !== null && e >= s ? [s, e] : null;
+  }
+  function calDefaultMonth(v) {
+    const p = periodOf(v);
+    const a = Calc.dayNum(v.asOfDate);
+    const t = a !== null ? a : Calc.dayNum(Calc.todayStr());
+    return Events.str(p ? (t >= p[0] && t <= p[1] ? t : p[0]) : t).slice(0, 7);
+  }
+  function shiftMonth(ym, k) {
+    let [y, m] = ym.split('-').map(Number); m += k;
+    while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; }
+    return `${y}-${String(m).padStart(2, '0')}`;
+  }
+  function renderCalendar() {
+    const box = $('#calendar');
+    if (state.calc !== 'target') { box.hidden = true; return; }
+    box.hidden = false;
+    const v = valuesOf('target');
+    if (!v.plans || typeof v.plans !== 'object' || Array.isArray(v.plans)) v.plans = {};
+    const key = `${v.startDate}|${v.endDate}`;
+    if (!state.calMonth || state.calKey !== key) { state.calMonth = calDefaultMonth(v); state.calKey = key; }
+    const [y, m] = state.calMonth.split('-').map(Number);
+    $('#calMonth').textContent = `${y}년 ${m}월`;
+    const first = Events.parse(`${state.calMonth}-01`);
+    const last = Events.parse(`${shiftMonth(state.calMonth, 1)}-01`) - 1;
+    renderChannelFilter();
+    const evs = Events.withChannels(first, last, calChannels());
+    const p = periodOf(v);
+    const today = Calc.dayNum(Calc.todayStr());
+    const grid = $('#calGrid'); grid.innerHTML = '';
+    WD.forEach((w, i) => { const h = document.createElement('div'); h.className = 'cal-wd' + (i === 0 ? ' red' : i === 6 ? ' sat' : ''); h.textContent = w; grid.append(h); });
+    const lead = new Date(first * 86400000).getUTCDay();
+    for (let i = 0; i < lead; i++) { const b = document.createElement('div'); b.className = 'cal-cell blank'; grid.append(b); }
+    for (let d = first; d <= last; d++) {
+      const ds = Events.str(d), dow = (lead + d - first) % 7;
+      const on = evs.filter((x) => x.start <= d && x.end >= d);
+      const cell = document.createElement('button'); cell.type = 'button'; cell.className = 'cal-cell'; cell.dataset.date = ds;
+      if (dow === 0 || on.some((x) => x.kind === 'holiday')) cell.classList.add('red'); else if (dow === 6) cell.classList.add('sat');
+      if (on.some((x) => x.kind === 'holiday' && x.start !== x.end)) cell.classList.add('in-holiday');
+      if (on.some((x) => x.kind === 'season')) cell.classList.add('in-season');
+      if (on.some((x) => x.kind === 'expected' || x.kind === 'channel')) cell.classList.add('in-expected');
+      if (p && (d < p[0] || d > p[1])) cell.classList.add('out');
+      if (d === today) cell.classList.add('today');
+      if (ds === calSel) cell.classList.add('sel');
+      // 여러 날 걸친 구간은 시작일·매달 1일·매주 일요일에만 이름을 적는다
+      const label = on.filter((x) => x.start === x.end || x.start === d || d === first || dow === 0);
+      const shown = label.slice(0, 3), more = label.length - shown.length;
+      cell.innerHTML = `<span class="num">${d - first + 1}</span>` + shown.map(evChip).join('') +
+        (more > 0 ? `<span class="ev more">+${more}개</span>` : '') +
+        (v.plans[ds] ? `<span class="ev k-plan">📝 ${escapeHtml(v.plans[ds])}</span>` : '');
+      cell.title = on.map((x) => `${x.name} — ${KIND_TAG[x.kind]}${x.kind === 'expected' ? ' · ' + x.label : ''}${x.note ? '\n' + x.note : ''}`).join('\n');
+      cell.onclick = () => { calSel = ds; renderCalendar(); $('#calPlanText').focus(); };
+      grid.append(cell);
+    }
+    // 선택한 날짜의 계획 입력
+    const planBox = $('#calPlan');
+    const inMonth = calSel && calSel.slice(0, 7) === state.calMonth;
+    planBox.hidden = !inMonth;
+    if (inMonth) {
+      const d = Events.parse(calSel);
+      $('#calPlanLabel').textContent = `${md2(d)} 판매 계획`;
+      $('#calPlanEvents').textContent = evs.filter((x) => x.start <= d && x.end >= d).map((x) => `${x.name}(${KIND_TAG[x.kind]})`).join(' · ');
+      const ta = $('#calPlanText');
+      if (document.activeElement !== ta) ta.value = v.plans[calSel] || '';
+    }
+    // 이번 달 주요 일정
+    const list = evs.filter((x) => x.boost || x.kind === 'holiday');
+    $('#calList').innerHTML = list.length ? '<div class="cal-list-title">이번 달 주요 일정</div>' + list.map((x) => {
+      let h = `<div class="cal-item"><span class="when">${x.start === x.end ? md2(x.start) : `${md2(x.start)} ~ ${md2(x.end)}`}</span>` +
+        evChip(x) + `<span class="tag">${KIND_TAG[x.kind]}${x.kind === 'expected' ? ` · ${escapeHtml(x.label)}<span class="conf c-${x.confidence}">신뢰도 ${x.confidence}</span>` : x.boost ? ' · 판매 증가' : ''}</span>` +
+        (x.note ? `<small>${escapeHtml(x.note)}</small>` : '');
+      if (x.kind === 'expected' || x.kind === 'channel') {
+        h += '<div class="acts">' + (x.sources || []).map((u, i) => `<a href="#" data-url="${escapeHtml(u)}">출처${x.sources.length > 1 ? i + 1 : ''} ↗</a>`).join('') +
+          (x.kind === 'expected' ? `<button type="button" class="small" data-confirm="${escapeHtml(x.key)}">실제 날짜로 확정</button>` : `<button type="button" class="small ghost" data-unconfirm="${escapeHtml(x.key)}">확정 취소</button>`) + '</div>';
+        if (calConfirming === x.key) h += `<div class="confirm-form">채널 발표 날짜: <input type="date" id="cfStart" value="${Events.str(x.start)}"> ~ <input type="date" id="cfEnd" value="${Events.str(x.end)}"><button type="button" class="primary small" id="cfOk">확정</button><button type="button" class="small" id="cfCancel">취소</button></div>`;
+      }
+      return h + '</div>';
+    }).join('') : '';
+    const saveConfirm = () => { store.set('eventConfirm', state.eventConfirm); Events.setConfirmed(state.eventConfirm); renderCalendar(); };
+    $('#calList').querySelectorAll('[data-url]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); api.openExternal(a.dataset.url); }; });
+    $('#calList').querySelectorAll('[data-confirm]').forEach((b) => { b.onclick = () => { calConfirming = b.dataset.confirm; renderCalendar(); }; });
+    $('#calList').querySelectorAll('[data-unconfirm]').forEach((b) => { b.onclick = () => { delete state.eventConfirm[b.dataset.unconfirm]; saveConfirm(); }; });
+    if ($('#cfOk')) {
+      $('#cfOk').onclick = () => {
+        const a = $('#cfStart').value, b = $('#cfEnd').value;
+        if (!a || !b || b < a) { toast('시작일과 종료일을 확인해 주세요', { err: true }); return; }
+        state.eventConfirm[calConfirming] = { start: a, end: b }; calConfirming = null; saveConfirm();
+        toast('확정했어요. 내년 예상 일정은 이 날짜를 기준으로 잡아요');
+      };
+      $('#cfCancel').onclick = () => { calConfirming = null; renderCalendar(); };
+    }
+    $('#calNote').textContent = Events.lunarCovered(y)
+      ? '공휴일·명절 연휴는 우주항공청 월력요항 기준이에요. 판매 시즌은 확정된 날짜를 기준으로 잡은 참고 구간이에요. 채널 행사 「예상」은 지난 개최 기록으로 잡은 시기라 채널 공지로 꼭 확인하세요.'
+      : `⚠ ${y}년 설·추석 날짜는 아직 앱에 없어요(월력요항 발표 후 업데이트로 추가). 양력 공휴일·기념일만 표시해요.`;
+  }
+  $('#calPrev').onclick = () => { state.calMonth = shiftMonth(state.calMonth, -1); renderCalendar(); };
+  $('#calNext').onclick = () => { state.calMonth = shiftMonth(state.calMonth, 1); renderCalendar(); };
+  $('#calPlanText').oninput = (e) => {
+    const v = valuesOf('target'); const t = e.target.value;
+    if (t.trim()) v.plans[calSel] = t; else delete v.plans[calSel];
+    saveValues();
+    const cell = document.querySelector(`.cal-cell[data-date="${calSel}"]`);
+    if (cell) { let pl = cell.querySelector('.k-plan'); if (!t.trim()) { if (pl) pl.remove(); } else { if (!pl) { pl = document.createElement('span'); pl.className = 'ev k-plan'; cell.append(pl); } pl.textContent = '📝 ' + t; } }
+  };
+  $('#calPlanText').onblur = () => renderCalendar();
 
   function renderChannelResults(v) {
     const box = $('#channelResults');
@@ -504,7 +643,7 @@
   function unmaskText(t) {
     return state.aliases.reduce((s, [real, al]) => s.split(al).join(real), t);
   }
-  function aiSummary() { return Calc.summaryText(state.calc, valuesOf(state.calc), privacyOpts()); }
+  function aiSummary() { return Calc.summaryText(state.calc, valuesOf(state.calc), Object.assign(privacyOpts(), { channels: calChannels() })); }
   const PRIVACY_LABEL = { name: '🔒 상품명 가림', strict: '🔒 상품명·금액 가림', off: '' };
   function renderPrivacyBadge() {
     const b = $('#privacyBadge');

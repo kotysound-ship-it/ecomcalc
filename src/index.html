@@ -62,6 +62,30 @@
           <input id="memo" class="memo" type="text" placeholder="메모 (선택) — 장부에 함께 기록돼요" />
         </div>
       </section>
+
+      <section class="card calendar" id="calendar" hidden>
+        <div class="cal-head">
+          <div class="card-title">📅 판매 캘린더 <span class="muted">· 날짜를 누르면 판매 계획을 적을 수 있어요</span></div>
+          <div class="cal-nav"><button class="ghost small" id="calPrev" title="이전 달">‹</button><strong id="calMonth"></strong><button class="ghost small" id="calNext" title="다음 달">›</button></div>
+        </div>
+        <div class="cal-legend">
+          <span><i class="k-holiday"></i>공휴일·연휴 <b>확정</b></span>
+          <span><i class="k-day"></i>기념일·쇼핑 데이 <b>확정</b></span>
+          <span><i class="k-season"></i>판매 시즌</span>
+          <span><i class="dash"></i>채널 행사 <b class="exp-t">예상</b></span>
+          <span><i class="k-channel"></i>채널 행사 <b>내가 확정</b></span>
+          <span><i class="k-plan"></i>내 판매 계획</span>
+        </div>
+        <div class="ch-filter" id="calChannels"></div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-plan" id="calPlan" hidden>
+          <label for="calPlanText" id="calPlanLabel"></label>
+          <div class="cal-plan-events" id="calPlanEvents"></div>
+          <textarea id="calPlanText" rows="2" placeholder="예) 쿠폰 10% · 광고비 2배 · 라이브 방송"></textarea>
+        </div>
+        <div class="cal-list" id="calList"></div>
+        <p class="muted cal-note" id="calNote"></p>
+      </section>
     </main>
 
     <aside class="ai-panel" id="aiPanel" aria-hidden="true">
@@ -212,6 +236,7 @@
 
   <div class="toast" id="toast" hidden></div>
 
+  <script src="events.js"></script>
   <script src="calc.js"></script>
   <script src="app.js"></script>
 </body>

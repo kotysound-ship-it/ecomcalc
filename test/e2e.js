@@ -91,6 +91,40 @@ module.exports = ({ app, win, clipboard }) => {
       await sleep(500); await shot('01b-target-channels');
       return `목표 ${r.kor} · 기간 ${r.days[0]}/${r.days[1]}일 · 채널 합계 ${r.korSum} · 남은 금액 ${r.bigs[1]} (${r.sub[0]})`;
     });
+    await step('판매 캘린더: 확정 공휴일·시즌 표시 + 날짜별 판매 계획', async () => {
+      const r = await js(`${H} nav('목표 달성');
+        const sd = document.getElementById('f_startDate'); sd.value = '2026-09-01'; sd.dispatchEvent(new Event('change'));
+        const ed = document.getElementById('f_endDate'); ed.value = '2026-09-30'; ed.dispatchEvent(new Event('change'));
+        const cell = (d) => document.querySelector('.cal-cell[data-date="' + d + '"]');
+        const month = $('#calMonth').textContent, chu = cell('2026-09-24').textContent, red = cell('2026-09-25').classList.contains('red') && cell('2026-09-25').classList.contains('in-holiday');
+        cell('2026-09-10').click();
+        const ta = $('#calPlanText'); ta.value = '추석 선물세트 기획전'; ta.dispatchEvent(new Event('input')); ta.blur();
+        const plan = cell('2026-09-10').textContent;
+        const list = $('#calList').textContent;
+        $('#calNext').click(); const next = $('#calMonth').textContent; $('#calPrev').click();
+        return { month, chu, red, plan, list, next, saved: JSON.parse(localStorage.getItem('values')).target.plans };`);
+      ok(r.month === '2026년 9월' && r.next === '2026년 10월', '월 이동 ' + r.month + ' ' + r.next);
+      ok(r.chu.includes('추석 연휴') && r.red, '추석 표시 ' + r.chu);
+      ok(r.plan.includes('추석 선물세트 기획전') && r.saved['2026-09-10'] === '추석 선물세트 기획전', '계획 저장 ' + r.plan);
+      ok(r.list.includes('추석 선물 시즌') && r.list.includes('확정'), '주요 일정 ' + r.list.slice(0, 120));
+      // 채널 행사 예상: 2026년 11월, 채널 끄기, 실제 날짜로 확정
+      const c = await js(`${H} const ed = document.getElementById('f_endDate'); const sd = document.getElementById('f_startDate');
+        sd.value = '2026-11-01'; sd.dispatchEvent(new Event('change')); ed.value = '2026-11-30'; ed.dispatchEvent(new Event('change'));
+        const cell = (d) => document.querySelector('.cal-cell[data-date="' + d + '"]');
+        const chBtn = (n) => [...document.querySelectorAll('#calChannels button')].find((b) => b.textContent === n);
+        const dflt = chBtn('쿠팡').classList.contains('on') && !chBtn('무신사').classList.contains('on'); // 채널별 목표에 쓴 쿠팡만 켜짐
+        const off = !cell('2026-11-15').textContent.includes('무신사');
+        chBtn('무신사').click();
+        const exp = cell('2026-11-15').innerHTML.includes('예상') && cell('2026-11-15').textContent.includes('무신사');
+        document.querySelector('[data-confirm="musinsa-winter:2026"]').click();
+        const s = document.getElementById('cfStart'); s.value = '2026-11-22'; const e = document.getElementById('cfEnd'); e.value = '2026-12-02';
+        document.getElementById('cfOk').click();
+        const conf = cell('2026-11-22').innerHTML.includes('k-channel') && !cell('2026-11-15').textContent.includes('무신사');
+        return { dflt, exp, off, conf, stored: JSON.parse(localStorage.getItem('eventConfirm')) };`);
+      ok(c.dflt && c.exp && c.off && c.conf && c.stored['musinsa-winter:2026'].start === '2026-11-22', '채널 행사 ' + JSON.stringify(c));
+      await sleep(500); await shot('01c-calendar');
+      return '2026년 9월: 추석 연휴(확정)·추석 선물 시즌 표시, 9/10 계획 저장';
+    });
     await step('계산기: 과/면세·끝자리 선택 버튼', async () => {
       const r = await js(`${H} nav('부가세'); seg('mode', '공급가액(VAT별도)'); type('f_amount', '10000'); const a = bigs();
         nav('할인가'); type('f_price','29900'); type('f_rate','15'); seg('unit','안 함'); const b = bigs(); seg('unit','100원'); const c = bigs(); return [a,b,c];`);

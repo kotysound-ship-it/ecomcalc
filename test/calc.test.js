@@ -96,6 +96,33 @@ near(R('target', { goal: '1000', actual: '400', daysPassed: '10', daysTotal: '30
 }
 near(R('supplyPrice', { consumer: '11000', distMargin: '30' }).supplyEx, 7000, 'supply ex');
 
+// 행사 달력: 확정 날짜
+{
+  const E = require('../src/events');
+  const on = (date) => E.between(E.parse(date), E.parse(date)).map((e) => e.name);
+  assert.ok(on('2026-09-25').includes('추석 연휴') && on('2027-02-09').includes('설날 연휴') && on('2028-10-05').includes('추석 연휴'), '음력 명절');
+  assert.ok(on('2026-11-27').includes('블랙프라이데이') && on('2027-11-26').includes('블랙프라이데이') && on('2027-11-29').includes('사이버먼데이'), '블프');
+  assert.ok(on('2026-05-08').includes('가정의 달') && on('2026-12-28').includes('연말 시즌') && on('2026-12-25').includes('크리스마스'), '시즌');
+  assert.ok(!on('2029-02-13').includes('설날 연휴') && !E.lunarCovered(2029), '표에 없는 해는 표시 안 함');
+  // 채널 행사 예상: 주차 계산, 채널 거르기, 확정 → 다음 해 예상은 확정일 기준
+  const ch = (from, to, chs) => E.withChannels(E.parse(from), E.parse(to), chs).filter((e) => e.channel);
+  const nov = ch('2026-11-01', '2026-11-30', null);
+  const mu = nov.find((e) => e.ruleId === 'musinsa-winter');
+  assert.ok(mu && E.str(mu.start) === '2026-11-15' && E.str(mu.end) === '2026-11-30' && mu.kind === 'expected' && mu.label === '11월 3~5주차', '무신사 주차');
+  const wow = ch('2026-07-01', '2026-07-31', ['쿠팡']);
+  assert.ok(wow.length === 1 && wow[0].name === '쿠팡 와우 멤버스데이' && E.str(wow[0].end) === '2026-07-07', '쿠팡 7월');
+  assert.ok(ch('2026-11-01', '2026-11-30', ['컬리']).length === 0 && ch('2026-11-01', '2026-11-30', []).length === 0, '채널 거르기');
+  E.setConfirmed({ 'musinsa-winter:2026': { start: '2026-11-22', end: '2026-12-02' } });
+  const c26 = ch('2026-11-01', '2026-12-31', ['무신사']).find((e) => e.ruleId === 'musinsa-winter');
+  const c27 = ch('2027-11-01', '2027-12-31', ['무신사']).find((e) => e.ruleId === 'musinsa-winter');
+  assert.ok(c26.kind === 'channel' && c26.confirmed && E.str(c27.start) === '2027-11-22' && E.str(c27.end) === '2027-12-02' && c27.kind === 'expected', '확정 학습');
+  E.setConfirmed({});
+  const sm2 = Calc.summaryText('target', { startDate: '2026-11-01', endDate: '2026-11-30', goal: '10' }, { channels: ['11번가'] });
+  assert.ok(sm2.includes('11번가 그랜드십일절 [채널 행사·예상(11월 1~11일, 신뢰도 높음)·판매 증가]') && !sm2.includes('무신사'), 'AI 요약 채널 행사: ' + sm2);
+  const sm = Calc.summaryText('target', { startDate: '2026-09-01', endDate: '2026-09-30', goal: '10', plans: { '2026-09-10': '추석 선물세트 기획전', '2026-10-10': '기간 밖' } });
+  assert.ok(sm.includes('추석 연휴 [공휴일·연휴·확정]') && sm.includes('추석 선물 시즌 [판매 시즌·판매 증가]') && sm.includes('추석 선물세트 기획전') && !sm.includes('기간 밖'), 'AI 요약 일정: ' + sm);
+}
+
 // ── 2. 엑셀 수식 vs JS (무작위 입력 다수)
 function rand(f) {
   if (f.type === 'select') return f.options[Math.floor(Math.random() * f.options.length)];

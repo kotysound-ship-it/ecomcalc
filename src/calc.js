@@ -7,6 +7,8 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.Calc = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
+  /* global Events */
+  const Ev = typeof Events !== 'undefined' ? Events : require('./events');
   const n = (x) => (x === '' || x === null || x === undefined || isNaN(Number(x)) ? 0 : Number(x));
   const pct = (x) => n(x) / 100;
   const div = (a, b) => (b === 0 || !isFinite(b) ? null : a / b);
@@ -502,6 +504,16 @@
             ? `${r.name}: 목표 비중 ${fmt(r.share, 'percent')}, 달성률 ${fmt(r.rate, 'percent')}, 마감 예상 달성률 ${fmt(r.forecastRate, 'percent')}`
             : `${r.name}: 목표 ${korWon(r.goal)}, 실적 ${korWon(r.actual)}, 달성률 ${fmt(r.rate, 'percent')}, 남은 금액 ${korWon(r.remain)}, 마감 예상 달성률 ${fmt(r.forecastRate, 'percent')}, 일평균 필요 ${r.dailyNeed === null ? '—' : korWon(r.dailyNeed)}`);
         }
+      }
+    }
+    if (id === 'target') {
+      // 행사 날짜는 AI 기억이 아니라 앱 달력에서만 보낸다
+      const s = dayNum(v.startDate), e = dayNum(v.endDate);
+      if (s !== null && e !== null && e >= s) {
+        const ev = Ev.withChannels(s, e, o.channels || []).filter((x) => x.boost || x.kind === 'holiday');
+        if (ev.length) { lines.push('— 기간 내 주요 일정 (앱 달력 기준) —'); ev.forEach((x) => lines.push(Ev.describe(x))); }
+        const plans = Object.entries(v.plans || {}).filter(([d, t]) => String(t).trim() && dayNum(d) !== null && dayNum(d) >= s && dayNum(d) <= e).sort();
+        if (plans.length) { lines.push('— 판매 계획 —'); plans.forEach(([d, t]) => lines.push(`${d}: ${String(t).trim()}`)); }
       }
     }
     lines.push('— 결과 —');
